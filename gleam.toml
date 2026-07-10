@@ -1,0 +1,16 @@
+name = "mongreldb"
+version = "0.1.0"
+description = "Pure-Gleam HTTP client for MongrelDB."
+licences = ["MIT", "Apache-2.0"]
+repository = { type = "github", user = "visorcraft", repo = "MongrelDB-Gleam" }
+links = [
+  { title = "MongrelDB", href = "https://www.MongrelDB.com" },
+]
+gleam = ">= 1.4.0"
+
+[dependencies]
+gleam_stdlib = ">= 0.40.0 and < 2.0.0"
+gleam_http = ">= 3.6.0 and < 4.0.0"
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"
