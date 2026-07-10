@@ -24,11 +24,13 @@ jobs:
         with:
           otp-version: '26'
           gleam-version: '1.14.0'
+          rebar3-version: '3.27.0'
 
       - name: Print versions
         run: |
           gleam --version
           erl -version
+          rebar3 --version
 
       - name: Download dependencies
         run: gleam deps download
@@ -37,7 +39,7 @@ jobs:
         run: gleam build
 
       - name: Format check
-        run: gleam format --check src tests
+        run: gleam format --check src test
 
       - name: Run offline unit tests
         # The test step runs the live suite; without a daemon every live test
@@ -60,11 +62,13 @@ jobs:
         with:
           otp-version: '26'
           gleam-version: '1.14.0'
+          rebar3-version: '3.27.0'
 
       - name: Print versions
         run: |
           gleam --version
           erl -version
+          rebar3 --version
 
       - name: Download dependencies
         run: gleam deps download
