@@ -20,3 +20,6 @@ AGENTS.md
 CLAUDE.md
 .cursorrules
 .zcode/
+
+# Erlang crash dumps
+erl_crash.dump

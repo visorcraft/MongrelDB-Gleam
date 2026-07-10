@@ -15,18 +15,18 @@
 ////
 //// [MongrelDB]: https://www.MongrelDB.com
 
+import gleam/bit_array
+import gleam/dict
 import gleam/dynamic
-import gleam/int
-import gleam/list
-import gleam/option.{type Option, None, Some}
-import gleam/pair
-import gleam/result
-import gleam/string
+import gleam/http.{type Method, Delete, Get, Post}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
-import gleam/http.{type Method, Delete, Get, Post}
-import gleam/bit_array
+import gleam/int
 import gleam/json
+import gleam/list
+import gleam/option.{type Option, None, Some}
+import gleam/result
+import gleam/string
 
 // ── Public types ──────────────────────────────────────────────────────────
 
@@ -36,6 +36,24 @@ pub const default_base_url = "http://127.0.0.1:8453"
 /// `max_response_bytes` caps the size of a response body read from the daemon
 /// (256 MB). Bodies larger than this are aborted as a `ResponseTooLarge` error.
 pub const max_response_bytes = 268_435_456
+
+/// `strip_trailing_slash` removes a single trailing `/` from a URL base. Used
+/// when normalizing the base URL; the older `string.trim_right(_, "/")` form is
+/// unavailable in the pinned gleam_stdlib (0.47.x trims whitespace only).
+fn strip_trailing_slash(s: String) -> String {
+  case string.ends_with(s, "/") {
+    False -> s
+    True -> string.drop_end(s, 1)
+  }
+}
+
+/// `strip_leading_slash` removes a single leading `/` from a path segment.
+fn strip_leading_slash(s: String) -> String {
+  case string.starts_with(s, "/") {
+    False -> s
+    True -> string.drop_start(s, 1)
+  }
+}
 
 /// `MongrelError` is the typed error returned by every client operation. HTTP
 /// status codes are mapped to a category: 401/403 -> `Auth`, 404 -> `NotFound`,
@@ -65,12 +83,7 @@ pub type MongrelError {
 
 /// `Client` is the MongrelDB HTTP client. Create one with `connect`.
 pub type Client {
-  Client(
-    base_url: String,
-    token: String,
-    username: String,
-    password: String,
-  )
+  Client(base_url: String, token: String, username: String, password: String)
 }
 
 /// `Options` configures a `Client`.
@@ -123,7 +136,7 @@ pub type Cell {
 pub fn connect(base_url: String, options: Options) -> Result(Client, Nil) {
   let url = case base_url {
     "" -> default_base_url
-    other -> string.trim_right(other, "/")
+    other -> strip_trailing_slash(other)
   }
   Ok(Client(
     base_url: url,
@@ -146,8 +159,8 @@ pub fn table_names(db: Client) -> Result(List(String), MongrelError) {
   use body <- result.try(raw_request(db, Get, "/tables", None))
   use data <- result.try(json_decode(body))
   use arr <- result.try(
-    dynamic.list(dynamic.string)(data)
-      |> result.replace_error(Json("expected an array of strings")),
+    dynamic.list(of: dynamic.string)(data)
+    |> result.replace_error(Json("expected an array of strings")),
   )
   Ok(arr)
 }
@@ -160,15 +173,16 @@ pub fn create_table(
   columns: List(Column),
 ) -> Result(Int, MongrelError) {
   let col_arr = list.map(columns, column_to_json)
-  let payload = json.object([
-    #("name", json.string(name)),
-    #("columns", json.array(col_arr)),
-  ])
+  let payload =
+    json.object([
+      #("name", json.string(name)),
+      #("columns", json.preprocessed_array(col_arr)),
+    ])
   use body <- result.try(post_json(db, "/kit/create_table", payload))
   use data <- result.try(json_decode(body))
   use obj <- result.try(
-    dynamic.field("table_id", dynamic.int)(data)
-      |> result.replace_error(Json("missing table_id")),
+    dynamic.field(named: "table_id", of: dynamic.int)(data)
+    |> result.replace_error(Json("missing table_id")),
   )
   Ok(obj)
 }
@@ -186,8 +200,8 @@ pub fn count(db: Client, table: String) -> Result(Int, MongrelError) {
   use body <- result.try(raw_request(db, Get, path, None))
   use data <- result.try(json_decode(body))
   use obj <- result.try(
-    dynamic.field("count", dynamic.int)(data)
-      |> result.replace_error(Json("missing count")),
+    dynamic.field(named: "count", of: dynamic.int)(data)
+    |> result.replace_error(Json("missing count")),
   )
   Ok(obj)
 }
@@ -203,14 +217,14 @@ pub fn put(
   cells: List(Cell),
   idempotency_key: String,
 ) -> Result(Value, MongrelError) {
-  let inner = json.object([
-    #("table", json.string(table)),
-    #("cells", json.array(flatten_cells(cells))),
-    #("returning", json.bool(False)),
-  ])
+  let inner =
+    json.object([
+      #("table", json.string(table)),
+      #("cells", json.preprocessed_array(flatten_cells(cells))),
+      #("returning", json.bool(False)),
+    ])
   let op = json.object([#("put", inner)])
-  let ops = json.array([op])
-  use results <- result.try(commit_txn(db, ops, idempotency_key))
+  use results <- result.try(commit_txn(db, op, idempotency_key))
   case results {
     [] -> Ok(dynamic.from(Nil))
     [first, ..] -> Ok(first)
@@ -229,17 +243,19 @@ pub fn upsert(
 ) -> Result(Value, MongrelError) {
   let base = [
     #("table", json.string(table)),
-    #("cells", json.array(flatten_cells(cells))),
+    #("cells", json.preprocessed_array(flatten_cells(cells))),
     #("returning", json.bool(False)),
   ]
   let entries = case update_cells {
     [] -> base
-    _ -> [#("update_cells", json.array(flatten_cells(update_cells))), ..base]
+    _ -> [
+      #("update_cells", json.preprocessed_array(flatten_cells(update_cells))),
+      ..base
+    ]
   }
   let inner = json.object(entries)
   let op = json.object([#("upsert", inner)])
-  let ops = json.array([op])
-  use results <- result.try(commit_txn(db, ops, idempotency_key))
+  use results <- result.try(commit_txn(db, op, idempotency_key))
   case results {
     [] -> Ok(dynamic.from(Nil))
     [first, ..] -> Ok(first)
@@ -247,14 +263,18 @@ pub fn upsert(
 }
 
 /// `delete` removes a row by its internal row id.
-pub fn delete(db: Client, table: String, row_id: Int) -> Result(Nil, MongrelError) {
-  let inner = json.object([
-    #("table", json.string(table)),
-    #("row_id", json.int(row_id)),
-  ])
+pub fn delete(
+  db: Client,
+  table: String,
+  row_id: Int,
+) -> Result(Nil, MongrelError) {
+  let inner =
+    json.object([
+      #("table", json.string(table)),
+      #("row_id", json.int(row_id)),
+    ])
   let op = json.object([#("delete", inner)])
-  let ops = json.array([op])
-  use _ <- result.try(commit_txn(db, ops, ""))
+  use _ <- result.try(commit_txn(db, op, ""))
   Ok(Nil)
 }
 
@@ -264,13 +284,13 @@ pub fn delete_by_pk(
   table: String,
   pk: Value,
 ) -> Result(Nil, MongrelError) {
-  let inner = json.object([
-    #("table", json.string(table)),
-    #("pk", json.dynamic(pk)),
-  ])
+  let inner =
+    json.object([
+      #("table", json.string(table)),
+      #("pk", json_value_of_dynamic(pk)),
+    ])
   let op = json.object([#("delete_by_pk", inner)])
-  let ops = json.array([op])
-  use _ <- result.try(commit_txn(db, ops, ""))
+  use _ <- result.try(commit_txn(db, op, ""))
   Ok(Nil)
 }
 
@@ -329,19 +349,21 @@ pub fn limit_(qb: QueryBuilder, row_limit: Int) -> QueryBuilder {
 /// `execute` builds the request, POSTs it to `/kit/query`, decodes the result
 /// set, and returns the rows.
 pub fn execute(qb: QueryBuilder) -> Result(List(Value), MongrelError) {
-  let conds_json = list.map(qb.conditions, fn(c) {
-    let params_json = list.map(c.params, fn(p) { #(p.0, json.dynamic(p.1)) })
-    json.object([#(c.condition_type, json.object(params_json))])
-  })
+  let conds_json =
+    list.map(qb.conditions, fn(c) {
+      let params_json =
+        list.map(c.params, fn(p) { #(p.0, json_value_of_dynamic(p.1)) })
+      json.object([#(c.condition_type, json.object(params_json))])
+    })
   let base = [#("table", json.string(qb.table))]
   let with_conds = case qb.conditions {
     [] -> base
-    _ -> [#("conditions", json.array(conds_json)), ..base]
+    _ -> [#("conditions", json.preprocessed_array(conds_json)), ..base]
   }
   let with_proj = case qb.projection {
     None -> with_conds
     Some(ids) -> [
-      #("projection", json.array(list.map(ids, json.int))),
+      #("projection", json.array(from: ids, of: json.int)),
       ..with_conds
     ]
   }
@@ -353,8 +375,8 @@ pub fn execute(qb: QueryBuilder) -> Result(List(Value), MongrelError) {
   use body <- result.try(post_json(qb.client, "/kit/query", payload))
   use data <- result.try(json_decode(body))
   use obj <- result.try(
-    dynamic.field("rows", dynamic.list(dynamic.dynamic))(data)
-      |> result.replace_error(Json("missing rows")),
+    dynamic.field(named: "rows", of: dynamic.list(of: dynamic.dynamic))(data)
+    |> result.replace_error(Json("missing rows")),
   )
   Ok(obj)
 }
@@ -364,7 +386,7 @@ pub fn execute(qb: QueryBuilder) -> Result(List(Value), MongrelError) {
 /// `Transaction` buffers a sequence of operations and flushes them atomically
 /// in a single `/kit/txn` request.
 pub type Transaction {
-  Transaction(client: Client, ops: List(Value), committed: Bool)
+  Transaction(client: Client, ops: List(json.Json), committed: Bool)
 }
 
 /// `begin` starts a new batch transaction.
@@ -382,13 +404,14 @@ pub fn txn_put(
   case txn.committed {
     True -> Error(AlreadyCommitted)
     False -> {
-      let inner = json.object([
-        #("table", json.string(table)),
-        #("cells", json.array(flatten_cells(cells))),
-        #("returning", json.bool(returning)),
-      ])
+      let inner =
+        json.object([
+          #("table", json.string(table)),
+          #("cells", json.preprocessed_array(flatten_cells(cells))),
+          #("returning", json.bool(returning)),
+        ])
       let op = json.object([#("put", inner)])
-      Ok(Transaction(..txn, ops: [json.to_value(op), ..txn.ops]))
+      Ok(Transaction(..txn, ops: [op, ..txn.ops]))
     }
   }
 }
@@ -402,12 +425,13 @@ pub fn txn_delete(
   case txn.committed {
     True -> Error(AlreadyCommitted)
     False -> {
-      let inner = json.object([
-        #("table", json.string(table)),
-        #("row_id", json.int(row_id)),
-      ])
+      let inner =
+        json.object([
+          #("table", json.string(table)),
+          #("row_id", json.int(row_id)),
+        ])
       let op = json.object([#("delete", inner)])
-      Ok(Transaction(..txn, ops: [json.to_value(op), ..txn.ops]))
+      Ok(Transaction(..txn, ops: [op, ..txn.ops]))
     }
   }
 }
@@ -421,12 +445,13 @@ pub fn txn_delete_by_pk(
   case txn.committed {
     True -> Error(AlreadyCommitted)
     False -> {
-      let inner = json.object([
-        #("table", json.string(table)),
-        #("pk", json.dynamic(pk)),
-      ])
+      let inner =
+        json.object([
+          #("table", json.string(table)),
+          #("pk", json_value_of_dynamic(pk)),
+        ])
       let op = json.object([#("delete_by_pk", inner)])
-      Ok(Transaction(..txn, ops: [json.to_value(op), ..txn.ops]))
+      Ok(Transaction(..txn, ops: [op, ..txn.ops]))
     }
   }
 }
@@ -447,8 +472,7 @@ pub fn commit(
     False -> {
       // An empty batch commits to nothing; mark committed and return empty.
       case txn.ops {
-        [] ->
-          Ok(#(Transaction(..txn, committed: True), []))
+        [] -> Ok(#(Transaction(..txn, committed: True), []))
         _ -> {
           use results <- result.try(commit_txn_raw(
             txn.client,
@@ -477,10 +501,11 @@ pub fn rollback(txn: Transaction) -> Result(Transaction, MongrelError) {
 /// name. For statements that yield no rows (DDL/DML), an empty list is
 /// returned.
 pub fn sql(db: Client, sql_text: String) -> Result(List(Value), MongrelError) {
-  let payload = json.object([
-    #("sql", json.string(sql_text)),
-    #("format", json.string("json")),
-  ])
+  let payload =
+    json.object([
+      #("sql", json.string(sql_text)),
+      #("format", json.string("json")),
+    ])
   use body <- result.try(post_json(db, "/sql", payload))
   let trimmed = string.trim(body)
   case trimmed {
@@ -494,8 +519,8 @@ pub fn sql(db: Client, sql_text: String) -> Result(List(Value), MongrelError) {
         True -> {
           use data <- result.try(json_decode(body))
           use arr <- result.try(
-            dynamic.list(dynamic.dynamic)(data)
-              |> result.replace_error(Json("expected a JSON array")),
+            dynamic.list(of: dynamic.dynamic)(data)
+            |> result.replace_error(Json("expected a JSON array")),
           )
           Ok(arr)
         }
@@ -512,9 +537,11 @@ pub fn schema(db: Client) -> Result(List(#(String, Value)), MongrelError) {
   use body <- result.try(raw_request(db, Get, "/kit/schema", None))
   use data <- result.try(json_decode(body))
   use tables <- result.try(
-    dynamic.field("tables", dynamic.pairs(dynamic.string, dynamic.dynamic))(
-      data,
-    )
+    dynamic.field(
+      named: "tables",
+      of: dynamic.dict(of: dynamic.string, to: dynamic.dynamic),
+    )(data)
+    |> result.map(dict.to_list)
     |> result.replace_error(Json("missing tables")),
   )
   Ok(tables)
@@ -542,10 +569,10 @@ fn commit_txn(
 
 fn commit_txn_raw(
   db: Client,
-  ops: List(Value),
+  ops: List(json.Json),
   idempotency_key: String,
 ) -> Result(List(Value), MongrelError) {
-  let base = [#("ops", json.array(ops))]
+  let base = [#("ops", json.preprocessed_array(ops))]
   let entries = case idempotency_key {
     "" -> base
     k -> [#("idempotency_key", json.string(k)), ..base]
@@ -554,8 +581,8 @@ fn commit_txn_raw(
   use body <- result.try(post_json(db, "/kit/txn", payload))
   use data <- result.try(json_decode(body))
   use results <- result.try(
-    dynamic.field("results", dynamic.list(dynamic.dynamic))(data)
-      |> result.replace_error(Json("missing results")),
+    dynamic.field(named: "results", of: dynamic.list(of: dynamic.dynamic))(data)
+    |> result.replace_error(Json("missing results")),
   )
   Ok(results)
 }
@@ -578,7 +605,7 @@ fn raw_request(
   path: String,
   body: Option(String),
 ) -> Result(String, MongrelError) {
-  let url = db.base_url <> "/" <> string.trim_left(path, "/")
+  let url = db.base_url <> "/" <> strip_leading_slash(path)
 
   let assert Ok(req) = request.to(url)
   let req = request.set_method(req, method)
@@ -607,9 +634,8 @@ fn raw_request(
   }
 
   let req = case body {
-    Some(b) ->
-      request.set_body(req, #("application/json", bit_array.from_string(b)))
-    None -> req
+    Some(b) -> request.set_body(req, bit_array.from_string(b))
+    None -> request.set_body(req, <<>>)
   }
 
   // Reject any request whose body contains a raw CRLF. HTTP request smuggling
@@ -626,8 +652,8 @@ fn raw_request(
       let code = resp.status
       case code < 200 || code >= 300 {
         False ->
-          Ok(bit_array.to_string(resp.body)
-            |> result.replace_error(Json("non-UTF-8 response body")))
+          bit_array.to_string(resp.body)
+          |> result.replace_error(Json("non-UTF-8 response body"))
         True -> Error(map_status(code))
       }
     }
@@ -643,9 +669,10 @@ fn base64_encode(input: String) -> String
 /// `crlf_check` rejects any request string that contains a raw CR or LF, which
 /// would let an attacker inject additional headers or split the request.
 fn crlf_check(req: Request(BitArray)) -> Result(Nil, MongrelError) {
-  let header_contains_crlf = list.any(req.headers, fn(h) {
-    string.contains(h.1, "\r") || string.contains(h.1, "\n")
-  })
+  let header_contains_crlf =
+    list.any(req.headers, fn(h) {
+      string.contains(h.1, "\r") || string.contains(h.1, "\n")
+    })
   case header_contains_crlf {
     True -> Error(Query("request header contains CRLF"))
     False -> Ok(Nil)
@@ -664,10 +691,52 @@ fn map_status(code: Int) -> MongrelError {
   }
 }
 
+/// `json_value_of_dynamic` recursively rebuilds a `json.Json` from a `Value`
+/// (Dynamic). gleam_json 1.x has no `json.dynamic`, so callers that need to
+/// embed a server-supplied value into an outgoing JSON payload use this to
+/// re-encode it. It covers every JSON class a MongrelDB value can carry.
+fn json_value_of_dynamic(v: Value) -> json.Json {
+  case dynamic.classify(v) {
+    "Int" -> {
+      let assert Ok(n) = dynamic.int(v)
+      json.int(n)
+    }
+    "Float" -> {
+      let assert Ok(f) = dynamic.float(v)
+      json.float(f)
+    }
+    "String" -> {
+      let assert Ok(s) = dynamic.string(v)
+      json.string(s)
+    }
+    "Bool" -> {
+      let assert Ok(b) = dynamic.bool(v)
+      json.bool(b)
+    }
+    "BitArray" -> json.null()
+    "Nil" -> json.null()
+    "List" -> {
+      let assert Ok(items) = dynamic.list(of: dynamic.dynamic)(v)
+      json.preprocessed_array(list.map(items, json_value_of_dynamic))
+    }
+    // JSON objects are decoded as Erlang maps, which classify as "Dict".
+    "Dict" -> {
+      let assert Ok(d) =
+        dynamic.dict(of: dynamic.string, to: dynamic.dynamic)(v)
+      json.object(
+        list.map(dict.to_list(d), fn(entry) {
+          #(entry.0, json_value_of_dynamic(entry.1))
+        }),
+      )
+    }
+    _ -> json.null()
+  }
+}
+
 /// `json_decode` decodes a JSON string into a `Value`.
 fn json_decode(body: String) -> Result(Value, MongrelError) {
-  json.decode(body, dynamic.dynamic)
-    |> result.replace_error(Json("malformed JSON body"))
+  json.decode(from: body, using: dynamic.dynamic)
+  |> result.replace_error(Json("malformed JSON body"))
 }
 
 // ── Cell / column helpers ─────────────────────────────────────────────────
@@ -676,7 +745,7 @@ fn json_decode(body: String) -> Result(Value, MongrelError) {
 /// `[col_id, value, col_id, value, ...]` JSON array.
 pub fn flatten_cells(cells: List(Cell)) -> List(json.Json) {
   list.flat_map(cells, fn(c) {
-    [json.int(c.id), json.dynamic(c.value)]
+    [json.int(c.id), json_value_of_dynamic(c.value)]
   })
 }
 
@@ -696,7 +765,7 @@ pub fn column_to_json(c: Column) -> json.Json {
       case variants {
         [] -> base
         _ -> [
-          #("enum_variants", json.array(list.map(variants, json.string))),
+          #("enum_variants", json.array(from: variants, of: json.string)),
           ..base
         ]
       }
@@ -745,7 +814,9 @@ pub fn normalize_condition(
 /// '/', '?', '#', or spaces cannot inject extra segments or break routing.
 pub fn url_path_escape(seg: String) -> String {
   // Fast path: nothing to escape.
-  let needs_escape = string.any(seg, fn(ch) { !is_unreserved(ch) })
+  let needs_escape =
+    string.to_utf_codepoints(seg)
+    |> list.any(fn(ch) { !is_unreserved(ch) })
   case needs_escape {
     False -> seg
     True -> {
@@ -797,8 +868,8 @@ fn bytes_to_pct(bytes: BitArray) -> String {
 }
 
 fn byte_to_hex(byte: Int) -> String {
-  let high = byte >> 4
-  let low = byte &&& 0x0f
+  let high = int.bitwise_shift_right(byte, 4)
+  let low = int.bitwise_and(byte, 15)
   nibble_to_hex(high) <> nibble_to_hex(low)
 }
 

@@ -43,7 +43,9 @@ send(Req) ->
     HeadersList = erlang:element(3, Req),
     %% HeadersList is a list of {Name, Value} binaries already; pass through
     %% unchanged (httpc accepts {string|binary, string|binary} header tuples).
-    {_ContentType, BodyBytes} = erlang:element(4, Req),
+    %% The Gleam client sets the body to a plain BitArray (empty <<>> when
+    %% there is no body); the content type travels in the headers instead.
+    BodyBytes = erlang:element(4, Req),
     Scheme = erlang:element(5, Req),
     Host = erlang:element(6, Req),
     Port = erlang:element(7, Req),

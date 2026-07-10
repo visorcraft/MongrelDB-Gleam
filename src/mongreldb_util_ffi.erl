@@ -18,9 +18,10 @@ unique_suffix() ->
     Msg = io_lib:format("~p_~p", [Ts, Unique]),
     unicode:characters_to_binary(Msg).
 
--spec getenv_str(string()) -> binary().
+-spec getenv_str(binary()) -> binary().
 getenv_str(Name) ->
-    case os:getenv(Name) of
+    %% Gleam String arrives as a binary; os:getenv/1 expects a charlist.
+    case os:getenv(unicode:characters_to_list(Name)) of
         false -> <<"">>;
         Value -> unicode:characters_to_binary(Value)
     end.

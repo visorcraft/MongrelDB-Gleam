@@ -31,8 +31,14 @@ pub fn main() {
 fn connect_or_skip() -> Result(mongreldb.Client, Nil) {
   let url = env_url()
   let assert Ok(db) =
-    mongreldb.connect(url, mongreldb.Options(token: "", username: "", password: ""))
-  mongreldb.health(db)
+    mongreldb.connect(
+      url,
+      mongreldb.Options(token: "", username: "", password: ""),
+    )
+  case mongreldb.health(db) {
+    Ok(True) -> Ok(db)
+    _ -> Error(Nil)
+  }
 }
 
 /// `env_url` returns the daemon URL from MONGRELDB_URL or the default.
@@ -86,27 +92,24 @@ fn float_col(id id: Int, name name: String) -> mongreldb.Column {
   )
 }
 
-fn varchar_col(id id: Int, name name: String) -> mongreldb.Column {
-  mongreldb.Column(
-    id: id,
-    name: name,
-    ty: "varchar",
-    primary_key: False,
-    nullable: False,
-    enum_variants: None,
-    default_value: None,
-  )
-}
-
 /// `fresh_table` drops any prior table with this name (ignoring NotFound) then
 /// creates it fresh.
-fn fresh_table(db: mongreldb.Client, name name: String, cols cols: List(mongreldb.Column)) -> Result(Int, mongreldb.MongrelError) {
+fn fresh_table(
+  db: mongreldb.Client,
+  name name: String,
+  cols cols: List(mongreldb.Column),
+) -> Result(Int, mongreldb.MongrelError) {
   let _ = mongreldb.drop_table(db, name)
   mongreldb.create_table(db, name, cols)
 }
 
-fn must_put(db: mongreldb.Client, table table: String, cells cells: List(mongreldb.Cell)) -> Nil {
+fn must_put(
+  db: mongreldb.Client,
+  table table: String,
+  cells cells: List(mongreldb.Cell),
+) -> Nil {
   let assert Ok(_) = mongreldb.put(db, table, cells, "")
+  Nil
 }
 
 // ── Tests (14-operation conformance matrix) ───────────────────────────────
@@ -115,7 +118,8 @@ pub fn health_test() {
   case connect_or_skip() {
     Error(Nil) -> io_println("SKIP: no mongreldb-server reachable")
     Ok(db) -> {
-      let assert Ok(true) = mongreldb.health(db)
+      let assert Ok(True) = mongreldb.health(db)
+      Nil
     }
   }
 }
@@ -125,8 +129,10 @@ pub fn create_table_and_count_test() {
     Error(Nil) -> Nil
     Ok(db) -> {
       let name = unique_table("gleam_tbl")
-      let assert Ok(_) = fresh_table(db, name, [int_col(1, "id", True), float_col(2, "amount")])
+      let assert Ok(_) =
+        fresh_table(db, name, [int_col(1, "id", True), float_col(2, "amount")])
       let assert Ok(0) = mongreldb.count(db, name)
+      Nil
     }
   }
 }
@@ -136,20 +142,30 @@ pub fn put_and_count_round_trip_test() {
     Error(Nil) -> Nil
     Ok(db) -> {
       let name = unique_table("gleam_put")
-      let assert Ok(_) = fresh_table(db, name, [int_col(1, "id", True), float_col(2, "amount")])
-      let assert Ok(_) = mongreldb.put(
-        db,
-        name,
-        [mongreldb.Cell(1, mongreldb.int_value(1)), mongreldb.Cell(2, mongreldb.float_value(99.5))],
-        "",
-      )
-      let assert Ok(_) = mongreldb.put(
-        db,
-        name,
-        [mongreldb.Cell(1, mongreldb.int_value(2)), mongreldb.Cell(2, mongreldb.float_value(150.0))],
-        "",
-      )
+      let assert Ok(_) =
+        fresh_table(db, name, [int_col(1, "id", True), float_col(2, "amount")])
+      let assert Ok(_) =
+        mongreldb.put(
+          db,
+          name,
+          [
+            mongreldb.Cell(1, mongreldb.int_value(1)),
+            mongreldb.Cell(2, mongreldb.float_value(99.5)),
+          ],
+          "",
+        )
+      let assert Ok(_) =
+        mongreldb.put(
+          db,
+          name,
+          [
+            mongreldb.Cell(1, mongreldb.int_value(2)),
+            mongreldb.Cell(2, mongreldb.float_value(150.0)),
+          ],
+          "",
+        )
       let assert Ok(2) = mongreldb.count(db, name)
+      Nil
     }
   }
 }
@@ -159,26 +175,35 @@ pub fn upsert_inserts_then_updates_test() {
     Error(Nil) -> Nil
     Ok(db) -> {
       let name = unique_table("gleam_upsert")
-      let assert Ok(_) = fresh_table(db, name, [int_col(1, "id", True), float_col(2, "amount")])
+      let assert Ok(_) =
+        fresh_table(db, name, [int_col(1, "id", True), float_col(2, "amount")])
 
       // First upsert inserts.
-      let assert Ok(_) = mongreldb.upsert(
-        db,
-        name,
-        [mongreldb.Cell(1, mongreldb.int_value(1)), mongreldb.Cell(2, mongreldb.float_value(99.5))],
-        [mongreldb.Cell(2, mongreldb.float_value(99.5))],
-        "",
-      )
+      let assert Ok(_) =
+        mongreldb.upsert(
+          db,
+          name,
+          [
+            mongreldb.Cell(1, mongreldb.int_value(1)),
+            mongreldb.Cell(2, mongreldb.float_value(99.5)),
+          ],
+          [mongreldb.Cell(2, mongreldb.float_value(99.5))],
+          "",
+        )
       let assert Ok(1) = mongreldb.count(db, name)
 
       // Second upsert on the same PK updates (still one row).
-      let assert Ok(_) = mongreldb.upsert(
-        db,
-        name,
-        [mongreldb.Cell(1, mongreldb.int_value(1)), mongreldb.Cell(2, mongreldb.float_value(120.0))],
-        [mongreldb.Cell(2, mongreldb.float_value(120.0))],
-        "",
-      )
+      let assert Ok(_) =
+        mongreldb.upsert(
+          db,
+          name,
+          [
+            mongreldb.Cell(1, mongreldb.int_value(1)),
+            mongreldb.Cell(2, mongreldb.float_value(120.0)),
+          ],
+          [mongreldb.Cell(2, mongreldb.float_value(120.0))],
+          "",
+        )
       let assert Ok(1) = mongreldb.count(db, name)
 
       // The updated value is returned by a query.
@@ -216,10 +241,23 @@ pub fn query_range_test() {
     Error(Nil) -> Nil
     Ok(db) -> {
       let name = unique_table("gleam_range")
-      let assert Ok(_) = fresh_table(db, name, [int_col(1, "id", True), int_col(2, "amount", False)])
-      must_put(db, name, [mongreldb.Cell(1, mongreldb.int_value(1)), mongreldb.Cell(2, mongreldb.int_value(50))])
-      must_put(db, name, [mongreldb.Cell(1, mongreldb.int_value(2)), mongreldb.Cell(2, mongreldb.int_value(120))])
-      must_put(db, name, [mongreldb.Cell(1, mongreldb.int_value(3)), mongreldb.Cell(2, mongreldb.int_value(200))])
+      let assert Ok(_) =
+        fresh_table(db, name, [
+          int_col(1, "id", True),
+          int_col(2, "amount", False),
+        ])
+      must_put(db, name, [
+        mongreldb.Cell(1, mongreldb.int_value(1)),
+        mongreldb.Cell(2, mongreldb.int_value(50)),
+      ])
+      must_put(db, name, [
+        mongreldb.Cell(1, mongreldb.int_value(2)),
+        mongreldb.Cell(2, mongreldb.int_value(120)),
+      ])
+      must_put(db, name, [
+        mongreldb.Cell(1, mongreldb.int_value(3)),
+        mongreldb.Cell(2, mongreldb.int_value(200)),
+      ])
 
       let q =
         db
@@ -244,15 +282,34 @@ pub fn transaction_put_commit_test() {
       let assert Ok(_) = fresh_table(db, name, [int_col(1, "id", True)])
 
       let txn = mongreldb.begin(db)
-      let assert Ok(txn) = mongreldb.txn_put(txn, name, [mongreldb.Cell(1, mongreldb.int_value(1))], False)
-      let assert Ok(txn) = mongreldb.txn_put(txn, name, [mongreldb.Cell(1, mongreldb.int_value(2))], False)
-      let assert Ok(txn) = mongreldb.txn_put(txn, name, [mongreldb.Cell(1, mongreldb.int_value(3))], False)
+      let assert Ok(txn) =
+        mongreldb.txn_put(
+          txn,
+          name,
+          [mongreldb.Cell(1, mongreldb.int_value(1))],
+          False,
+        )
+      let assert Ok(txn) =
+        mongreldb.txn_put(
+          txn,
+          name,
+          [mongreldb.Cell(1, mongreldb.int_value(2))],
+          False,
+        )
+      let assert Ok(txn) =
+        mongreldb.txn_put(
+          txn,
+          name,
+          [mongreldb.Cell(1, mongreldb.int_value(3))],
+          False,
+        )
       mongreldb.txn_count(txn) |> should.equal(3)
 
       let assert Ok(#(_, results)) = mongreldb.commit(txn, "")
       results |> list.length |> should.equal(3)
 
       let assert Ok(3) = mongreldb.count(db, name)
+      Nil
     }
   }
 }
@@ -266,8 +323,10 @@ pub fn delete_by_pk_test() {
       must_put(db, name, [mongreldb.Cell(1, mongreldb.int_value(5))])
       let assert Ok(1) = mongreldb.count(db, name)
 
-      let assert Ok(_) = mongreldb.delete_by_pk(db, name, mongreldb.int_value(5))
+      let assert Ok(_) =
+        mongreldb.delete_by_pk(db, name, mongreldb.int_value(5))
       let assert Ok(0) = mongreldb.count(db, name)
+      Nil
     }
   }
 }
@@ -277,11 +336,16 @@ pub fn sql_test() {
     Error(Nil) -> Nil
     Ok(db) -> {
       let name = unique_table("gleam_sql")
-      let assert Ok(_) = fresh_table(db, name, [int_col(1, "id", True), int_col(2, "amount", False)])
+      let assert Ok(_) =
+        fresh_table(db, name, [
+          int_col(1, "id", True),
+          int_col(2, "amount", False),
+        ])
       let assert Ok(0) = mongreldb.count(db, name)
 
       // INSERT via SQL must increase the row count.
-      let insert_stmt = "INSERT INTO " <> name <> " (id, amount) VALUES (10, 42)"
+      let insert_stmt =
+        "INSERT INTO " <> name <> " (id, amount) VALUES (10, 42)"
       let assert Ok(_) = mongreldb.sql(db, insert_stmt)
       let assert Ok(1) = mongreldb.count(db, name)
 
@@ -302,7 +366,8 @@ pub fn schema_test() {
     Error(Nil) -> Nil
     Ok(db) -> {
       let name = unique_table("gleam_schema")
-      let assert Ok(_) = fresh_table(db, name, [int_col(1, "id", True), float_col(2, "amount")])
+      let assert Ok(_) =
+        fresh_table(db, name, [int_col(1, "id", True), float_col(2, "amount")])
 
       let assert Ok(catalog) = mongreldb.schema(db)
       let names = list.map(catalog, fn(p) { p.0 })
@@ -316,12 +381,17 @@ pub fn schema_for_test() {
     Error(Nil) -> Nil
     Ok(db) -> {
       let name = unique_table("gleam_schema_for")
-      let assert Ok(_) = fresh_table(db, name, [int_col(1, "id", True), float_col(2, "amount")])
+      let assert Ok(_) =
+        fresh_table(db, name, [int_col(1, "id", True), float_col(2, "amount")])
 
       let assert Ok(desc) = mongreldb.schema_for(db, name)
       // The descriptor must carry a schema_id and a columns array of length 2.
-      let assert Ok(_schema_id) = dynamic.field("schema_id", dynamic.int)(desc)
-      let assert Ok(cols) = dynamic.field("columns", dynamic.list(dynamic.dynamic))(desc)
+      let assert Ok(_schema_id) =
+        dynamic.field(named: "schema_id", of: dynamic.int)(desc)
+      let assert Ok(cols) =
+        dynamic.field(named: "columns", of: dynamic.list(of: dynamic.dynamic))(
+          desc,
+        )
       cols |> list.length |> should.equal(2)
     }
   }
@@ -347,6 +417,7 @@ pub fn error_on_nonexistent_table_test() {
       let name = unique_table("gleam_missing")
       let result = mongreldb.schema_for(db, name)
       result |> should.be_error
+      Nil
     }
   }
 }
