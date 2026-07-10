@@ -9,12 +9,14 @@
 %% `httpc` is started (via `inets`) at the top of `send/1` so callers never have
 %% to manage the inets application themselves.
 %%
-%% The gleam/http record shapes are kept stable across versions:
-%%   request(Method, Url, Scheme, Host, Headers, Body)
-%%   response(Status, Headers, Body)
-%% where Headers is a gleam@dict:dict_ and Body is a 2-tuple of {ContentType,
-%% BitArray}. The record tuples are built by tuple index so this file does not
-%% need to include gleam_http header records.
+%% The gleam/http record shapes for gleam_http 3.6.0 are (custom types compile
+%% to Erlang tuples tagged by the constructor name in element 1):
+%%   Request:  {request, Method, Headers, Body, Scheme, Host, Port, Path, Query}
+%%   Response: {response, Status, Headers, Body}
+%% where Headers is a list of {BinaryName, BinaryValue} tuples and Body is a
+%% 2-tuple of {ContentType, BitArray} as set by the Gleam client. The record
+%% tuples are accessed by index so this file does not need to include
+%% gleam_http header records.
 
 -module(mongreldb_ffi).
 
@@ -35,14 +37,20 @@
 send(Req) ->
     %% Ensure inets/httpc are available. inets:start/0 is idempotent.
     ok = maybe_start_inets(),
-    %% gleam/http request record: {request, Method, Url, Scheme, Host, Headers, Body}
+    %% gleam/http 3.6.0 Request record:
+    %%   {request, Method, Headers, Body, Scheme, Host, Port, Path, Query}
     MethodAtom = erlang:element(2, Req),
-    Url = erlang:binary_to_list(erlang:element(3, Req)),
-    HeadersMap = erlang:element(6, Req),
-    Headers0 = maps:to_list(HeadersMap),
-    Headers = [{string:lowercase(erlang:atom_to_binary(K, utf8)), V} || {K, V} <- Headers0],
-    %% Body is {ContentType, BitArray}; pass the raw bytes through.
-    {_ContentType, BodyBytes} = erlang:element(7, Req),
+    HeadersList = erlang:element(3, Req),
+    %% HeadersList is a list of {Name, Value} binaries already; pass through
+    %% unchanged (httpc accepts {string|binary, string|binary} header tuples).
+    {_ContentType, BodyBytes} = erlang:element(4, Req),
+    Scheme = erlang:element(5, Req),
+    Host = erlang:element(6, Req),
+    Port = erlang:element(7, Req),
+    Path = erlang:element(8, Req),
+    Query = erlang:element(9, Req),
+    Url = build_url(Scheme, Host, Port, Path, Query),
+    Headers = [{normalize_header_name(K), V} || {K, V} <- HeadersList],
     HttpOpts = [
         {timeout, 30000},
         %% Disable automatic redirect-following; the Gleam client maps 3xx to
@@ -52,7 +60,13 @@ send(Req) ->
     ],
     Opts = [{body_format, binary}, {full_result, true}],
     HttpcMethod = method_to_atom(MethodAtom),
-    Result = httpc:request(HttpcMethod, {Url, Headers, "application/json", BodyBytes}, HttpOpts, Opts),
+    %% httpc rejects an empty body in the 4-tuple request form, so GET/DELETE
+    %% (no body) use the 2-tuple {Url, Headers} form.
+    RequestTuple = case byte_size(BodyBytes) of
+        0 -> {Url, Headers};
+        _ -> {Url, Headers, "application/json", BodyBytes}
+    end,
+    Result = httpc:request(HttpcMethod, RequestTuple, HttpOpts, Opts),
     case Result of
         {ok, {{_Ver, Status, _Reason}, RespHeaders, RespBody}} ->
             case byte_size(RespBody) > ?MAX_RESPONSE_BYTES of
@@ -60,14 +74,54 @@ send(Req) ->
                     {error, response_too_large};
                 false ->
                     Normalized = [{list_to_binary(string:lowercase(K)), list_to_binary(V)} || {K, V} <- RespHeaders],
-                    %% gleam/http response record: {response, Status, BodySize, Headers, Body}
-                    Response = {response, Status, {some, byte_size(RespBody)}, maps:from_list(Normalized), RespBody},
+                    %% gleam/http response record: {response, Status, Headers, Body}
+                    Response = {response, Status, Normalized, RespBody},
                     {ok, Response}
             end;
         {error, Reason} ->
             Msg = unicode:characters_to_binary(io_lib:format("~p", [Reason])),
             {error, {http, Msg}}
     end.
+
+%% `build_url/5` reconstructs the request URL string from the gleam/http Request
+%% components (Scheme, Host, Port, Path, Query). Port is {some, Int} | none;
+%% Query is {some, String} | none; Scheme/Host/Path are atoms/strings/binary as
+%% encoded by gleam.
+-spec build_url(term(), term(), term(), term(), term()) -> string().
+build_url(Scheme, Host, Port, Path, Query) ->
+    SchemeStr = to_latin1_string(Scheme),
+    HostStr = to_latin1_string(Host),
+    PortStr = case Port of
+        {some, PortNum} when PortNum =/= 80, PortNum =/= 443 ->
+            ":" ++ erlang:integer_to_list(PortNum);
+        _ ->
+            ""
+    end,
+    RawPath = to_latin1_string(Path),
+    PathStr = case RawPath of
+        "" -> "/";
+        _ -> RawPath
+    end,
+    QueryStr = case Query of
+        {some, Q} -> "?" ++ to_latin1_string(Q);
+        _ -> ""
+    end,
+    SchemeStr ++ "://" ++ HostStr ++ PortStr ++ PathStr ++ QueryStr.
+
+%% `to_latin1_string/1` coerces a gleam-encoded scheme/host/path value (atom,
+%% binary, or list) into the latin1 string httpc expects.
+-spec to_latin1_string(term()) -> string().
+to_latin1_string(V) when is_binary(V) -> erlang:binary_to_list(V);
+to_latin1_string(V) when is_atom(V) -> erlang:atom_to_list(V);
+to_latin1_string(V) when is_list(V) -> V.
+
+%% `normalize_header_name/1` lowercases a header name for httpc. Accepts binary
+%% or list header names (gleam emits binaries).
+-spec normalize_header_name(term()) -> string().
+normalize_header_name(K) when is_binary(K) ->
+    string:lowercase(erlang:binary_to_list(K));
+normalize_header_name(K) when is_list(K) ->
+    string:lowercase(K).
 
 %% `base64_encode/1` base64-encodes a string for HTTP Basic auth credentials.
 -spec base64_encode(binary()) -> binary().
