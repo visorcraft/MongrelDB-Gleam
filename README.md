@@ -90,6 +90,11 @@ pub fn main() {
 }
 ```
 
+Use `ColumnWithDefaults` for static JSON scalar defaults and explicit dynamic
+defaults. `default_value_json` takes precedence over legacy string
+`default_value`; `default_expr` accepts `"now"` or `"uuid"` and takes
+precedence server-side.
+
 ## Authentication
 
 ```gleam

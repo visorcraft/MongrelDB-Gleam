@@ -114,6 +114,20 @@ pub type Column {
     /// column's `ty`). `None` means no default.
     default_value: Option(String),
   )
+  ColumnWithDefaults(
+    id: Int,
+    name: String,
+    ty: String,
+    primary_key: Bool,
+    nullable: Bool,
+    enum_variants: Option(List(String)),
+    /// Legacy string default.
+    default_value: Option(String),
+    /// Static JSON scalar. Takes precedence over `default_value`.
+    default_value_json: Option(json.Json),
+    /// Dynamic default: `now` or `uuid`.
+    default_expr: Option(String),
+  )
 }
 
 /// `Value` is a dynamic JSON value used for cells, query parameters, and the
@@ -798,9 +812,16 @@ pub fn column_to_json(c: Column) -> json.Json {
         ]
       }
   }
-  let with_default = case c.default_value {
-    None -> with_enum
-    Some(d) -> [#("default_value", json.string(d)), ..with_enum]
+  let with_default = case c {
+    ColumnWithDefaults(default_expr: Some(expr), ..) ->
+      [#("default_expr", json.string(expr)), ..with_enum]
+    ColumnWithDefaults(default_value_json: Some(d), ..) ->
+      [#("default_value", d), ..with_enum]
+    _ ->
+      case c.default_value {
+        None -> with_enum
+        Some(d) -> [#("default_value", json.string(d)), ..with_enum]
+      }
   }
   json.object(with_default)
 }

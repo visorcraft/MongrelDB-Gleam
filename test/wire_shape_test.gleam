@@ -8,6 +8,7 @@
 // silently break user schemas, so the wire shape is asserted here.
 
 import gleam/option.{None, Some}
+import gleam/json
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -36,6 +37,38 @@ pub fn column_to_json_emits_enum_and_default_test() {
   let s = render(col)
   string.contains(s, "\"enum_variants\":[\"a\",\"b\"]") |> should.be_true
   string.contains(s, "\"default_value\":\"a\"") |> should.be_true
+}
+
+pub fn column_to_json_emits_scalar_and_expression_defaults_test() {
+  let scalar =
+    mongreldb.ColumnWithDefaults(
+      id: 4,
+      name: "attempts",
+      ty: "int64",
+      primary_key: False,
+      nullable: False,
+      enum_variants: None,
+      default_value: Some("legacy"),
+      default_value_json: Some(json.int(3)),
+      default_expr: None,
+    )
+  let scalar_s = render(scalar)
+  string.contains(scalar_s, "\"default_value\":3") |> should.be_true
+  let expr =
+    mongreldb.ColumnWithDefaults(
+      id: 4,
+      name: "attempts",
+      ty: "int64",
+      primary_key: False,
+      nullable: False,
+      enum_variants: None,
+      default_value: Some("legacy"),
+      default_value_json: Some(json.int(3)),
+      default_expr: Some("uuid"),
+    )
+  let expr_s = render(expr)
+  string.contains(expr_s, "\"default_expr\":\"uuid\"") |> should.be_true
+  string.contains(expr_s, "default_value") |> should.be_false
 }
 
 pub fn column_to_json_omits_absent_enum_and_default_test() {
