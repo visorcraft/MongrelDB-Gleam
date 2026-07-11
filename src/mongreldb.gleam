@@ -179,31 +179,56 @@ pub fn table_names(db: Client) -> Result(List(String), MongrelError) {
   Ok(arr)
 }
 
+/// `set_history_retention_epochs` sets the retention window and returns the
+/// post-update `(history_retention_epochs, earliest_retained_epoch)` pair.
 pub fn set_history_retention_epochs(db: Client, epochs: Int) -> Result(#(Int, Int), MongrelError) {
-  use body <- result.try(raw_request(db, Put, "/history/retention", Some(json.to_string(json.object([#("history_retention_epochs", json.int(epochs))])))))
-  decode_history_retention(body)
+  use body <- result.try(raw_request(db, Put, "/history/retention", Some(history_retention_request_body(epochs))))
+  history_retention_response_parse(body)
 }
 
+/// `history_retention` returns the current retention window and earliest retained
+/// epoch as a pair.
 pub fn history_retention(db: Client) -> Result(#(Int, Int), MongrelError) {
   use body <- result.try(raw_request(db, Get, "/history/retention", None))
-  decode_history_retention(body)
+  history_retention_response_parse(body)
 }
 
+/// `history_retention_epochs` returns the configured retention window.
 pub fn history_retention_epochs(db: Client) -> Result(Int, MongrelError) {
   use values <- result.try(history_retention(db))
   Ok(values.0)
 }
 
+/// `earliest_retained_epoch` returns the earliest readable epoch floor.
 pub fn earliest_retained_epoch(db: Client) -> Result(Int, MongrelError) {
   use values <- result.try(history_retention(db))
   Ok(values.1)
 }
 
-fn decode_history_retention(body: String) -> Result(#(Int, Int), MongrelError) {
+/// `history_retention_request_body` returns the exact JSON body sent by
+/// `set_history_retention_epochs`. Exposed so wire-shape tests can assert the
+/// PUT payload without a daemon.
+pub fn history_retention_request_body(epochs: Int) -> String {
+  json.to_string(json.object([#("history_retention_epochs", json.int(epochs))]))
+}
+
+/// `history_retention_response_parse` decodes the GET/PUT /history/retention
+/// response shape. Exposed so wire-shape tests can exercise the parsing path
+/// without a daemon. Rejects objects with missing or extra keys.
+pub fn history_retention_response_parse(body: String) -> Result(#(Int, Int), MongrelError) {
   use data <- result.try(json_decode(body))
-  use epochs <- result.try(dynamic.field(named: "history_retention_epochs", of: dynamic.int)(data) |> result.replace_error(Json("missing history_retention_epochs")))
-  use earliest <- result.try(dynamic.field(named: "earliest_retained_epoch", of: dynamic.int)(data) |> result.replace_error(Json("missing earliest_retained_epoch")))
-  Ok(#(epochs, earliest))
+  use obj <- result.try(
+    dynamic.dict(of: dynamic.string, to: dynamic.dynamic)(data)
+    |> result.replace_error(Json("history retention response is not a JSON object")),
+  )
+  case dict.size(obj) == 2 {
+    False -> Error(Json("history retention response keys mismatch"))
+    True -> {
+      use epochs <- result.try(dynamic.field(named: "history_retention_epochs", of: dynamic.int)(data) |> result.replace_error(Json("missing history_retention_epochs")))
+      use earliest <- result.try(dynamic.field(named: "earliest_retained_epoch", of: dynamic.int)(data) |> result.replace_error(Json("missing earliest_retained_epoch")))
+      Ok(#(epochs, earliest))
+    }
+  }
 }
 
 /// `create_table` creates a table named `name` with the given columns and

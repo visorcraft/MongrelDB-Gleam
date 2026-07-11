@@ -7,7 +7,7 @@
 // `/kit/create_table` accepts. A future regression that drops either key would
 // silently break user schemas, so the wire shape is asserted here.
 
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/json
 import gleam/string
 import gleeunit
@@ -111,4 +111,98 @@ pub fn column_to_json_omits_empty_enum_test() {
   // An explicit empty slice should not be emitted.
   string.contains(s, "enum_variants") |> should.be_false
   string.contains(s, "\"default_value\":\"x\"") |> should.be_true
+}
+
+// ── History retention wire shape ────────────────────────────────────────────
+
+pub fn history_retention_request_body_test() {
+  mongreldb.history_retention_request_body(250)
+  |> should.equal("{\"history_retention_epochs\":250}")
+}
+
+pub fn history_retention_response_parse_valid_test() {
+  mongreldb.history_retention_response_parse(
+    "{\"history_retention_epochs\":100,\"earliest_retained_epoch\":5}",
+  )
+  |> should.equal(Ok(#(100, 5)))
+}
+
+pub fn history_retention_response_parse_missing_key_test() {
+  mongreldb.history_retention_response_parse(
+    "{\"history_retention_epochs\":100}",
+  )
+  |> should.be_error
+}
+
+pub fn history_retention_response_parse_extra_key_test() {
+  mongreldb.history_retention_response_parse(
+    "{\"history_retention_epochs\":100,\"earliest_retained_epoch\":5,\"extra\":1}",
+  )
+  |> should.be_error
+}
+
+pub fn history_retention_response_parse_non_integer_test() {
+  mongreldb.history_retention_response_parse(
+    "{\"history_retention_epochs\":\"100\",\"earliest_retained_epoch\":5}",
+  )
+  |> should.be_error
+}
+
+// ── Full static-default matrix ──────────────────────────────────────────────
+
+fn defaults_col(
+  id id: Int,
+  name name: String,
+  default_value_json default_value_json: Option(json.Json),
+  default_expr default_expr: Option(String),
+) -> mongreldb.Column {
+  mongreldb.ColumnWithDefaults(
+    id: id,
+    name: name,
+    ty: "varchar",
+    primary_key: False,
+    nullable: True,
+    enum_variants: None,
+    default_value: Some("legacy"),
+    default_value_json: default_value_json,
+    default_expr: default_expr,
+  )
+}
+
+pub fn column_to_json_full_static_default_matrix_test() {
+  let string_col = defaults_col(2, "label", Some(json.string("draft")), None)
+  let int_col = defaults_col(3, "qty", Some(json.int(7)), None)
+  let bool_col = defaults_col(4, "active", Some(json.bool(True)), None)
+  let null_col = defaults_col(5, "notes", Some(json.null()), None)
+  let literal_now_col = defaults_col(6, "created", Some(json.string("now")), None)
+  let expr_col = defaults_col(7, "updated", None, Some("now"))
+
+  string.contains(render(string_col), "\"default_value\":\"draft\"") |> should.be_true
+  string.contains(render(int_col), "\"default_value\":7") |> should.be_true
+  string.contains(render(bool_col), "\"default_value\":true") |> should.be_true
+  string.contains(render(null_col), "\"default_value\":null") |> should.be_true
+  string.contains(render(literal_now_col), "\"default_value\":\"now\"") |> should.be_true
+
+  let expr_s = render(expr_col)
+  string.contains(expr_s, "\"default_expr\":\"now\"") |> should.be_true
+  string.contains(expr_s, "default_value") |> should.be_false
+}
+
+pub fn column_to_json_default_expr_takes_precedence_test() {
+  // When default_expr is set, the legacy/default_value_json fields are ignored.
+  let col =
+    mongreldb.ColumnWithDefaults(
+      id: 8,
+      name: "uuid_col",
+      ty: "varchar",
+      primary_key: False,
+      nullable: True,
+      enum_variants: None,
+      default_value: Some("legacy"),
+      default_value_json: Some(json.string("ignored")),
+      default_expr: Some("uuid"),
+    )
+  let s = render(col)
+  string.contains(s, "\"default_expr\":\"uuid\"") |> should.be_true
+  string.contains(s, "default_value") |> should.be_false
 }

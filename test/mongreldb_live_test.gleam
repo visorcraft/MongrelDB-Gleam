@@ -2,18 +2,21 @@
 //
 // These exercise the client against a running mongreldb-server daemon on
 // http://127.0.0.1:8453 (override with the MONGRELDB_URL env var). The suite
-// is a 14-operation conformance matrix mirroring the other MongrelDB clients:
+// is a 16-operation conformance matrix mirroring the other MongrelDB clients:
 // health, create table + count, put round trip, upsert, pk query, range query,
-// transaction commit, delete by pk, sql, schema, schema_for, table names, and
-// the two error-path cases (nonexistent table, typed status).
+// transaction commit, delete by pk, sql, schema, schema_for, table names,
+// the two error-path cases (nonexistent table, typed status), and the two
+// history-retention cases (read and shrink).
 //
 // When no daemon is reachable the whole suite short-circuits with an explicit
 // skip notice rather than a cascade of failures.
 
 import gleam/dynamic
+import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{None}
+import gleam/result
 import gleeunit
 import gleeunit/should
 
@@ -479,6 +482,186 @@ pub fn error_type_carries_status_test() {
         Error(_) -> should.be_true(False)
         Ok(_) -> should.be_true(False)
       }
+    }
+  }
+}
+
+// ── History retention helpers ─────────────────────────────────────────────
+
+fn retention_table_columns() -> List(mongreldb.Column) {
+  [
+    mongreldb.Column(1, "id", "int64", True, False, None, None),
+    mongreldb.Column(2, "name", "varchar", False, False, None, None),
+    mongreldb.Column(3, "amount", "int64", False, False, None, None),
+  ]
+}
+
+fn as_of_count(
+  db: mongreldb.Client,
+  table: String,
+  pk: Int,
+  amount: Int,
+  epoch: Int,
+) -> Result(Int, mongreldb.MongrelError) {
+  let stmt =
+    "SELECT count(*) AS n FROM "
+    <> table
+    <> " AS OF EPOCH "
+    <> int.to_string(epoch)
+    <> " WHERE id = "
+    <> int.to_string(pk)
+    <> " AND amount = "
+    <> int.to_string(amount)
+  use rows <- result.try(mongreldb.sql(db, stmt))
+  case rows {
+    [row] -> {
+      use n <- result.try(
+        dynamic.field(named: "n", of: dynamic.int)(row)
+        |> result.replace_error(mongreldb.Json("missing n")),
+      )
+      Ok(n)
+    }
+    _ -> Error(mongreldb.Json("expected one row"))
+  }
+}
+
+fn find_epoch_with_value(
+  db: mongreldb.Client,
+  table: String,
+  pk: Int,
+  amount: Int,
+  lo: Int,
+  hi: Int,
+) -> Result(Int, mongreldb.MongrelError) {
+  list.range(lo, hi)
+  |> list.find_map(fn(epoch) {
+    case as_of_count(db, table, pk, amount, epoch) {
+      Ok(n) if n > 0 -> Ok(epoch)
+      _ -> Error(Nil)
+    }
+  })
+  |> result.replace_error(mongreldb.Json("no retained epoch contained the expected value"))
+}
+
+// ── History retention tests ─────────────────────────────────────────────────
+
+pub fn history_retention_read_test() {
+  case connect_or_skip() {
+    Error(Nil) -> Nil
+    Ok(db) -> {
+      let assert Ok(#(window, _)) =
+        mongreldb.set_history_retention_epochs(db, 100)
+
+      let name = unique_table("gleam_ret_read")
+      let _ = mongreldb.drop_table(db, name)
+      let assert Ok(_) =
+        mongreldb.create_table(db, name, retention_table_columns())
+
+      let assert Ok(_) =
+        mongreldb.put(
+          db,
+          name,
+          [
+            mongreldb.Cell(1, mongreldb.int_value(1)),
+            mongreldb.Cell(2, mongreldb.string_value("A")),
+            mongreldb.Cell(3, mongreldb.int_value(10)),
+          ],
+          "",
+        )
+      let assert Ok(_) =
+        mongreldb.upsert(
+          db,
+          name,
+          [
+            mongreldb.Cell(1, mongreldb.int_value(1)),
+            mongreldb.Cell(2, mongreldb.string_value("A")),
+            mongreldb.Cell(3, mongreldb.int_value(20)),
+          ],
+          [mongreldb.Cell(3, mongreldb.int_value(20))],
+          "",
+        )
+
+      let assert Ok(#(_, earliest)) = mongreldb.history_retention(db)
+      let assert Ok(old_epoch) =
+        find_epoch_with_value(db, name, 1, 10, earliest, earliest + window)
+      { old_epoch >= earliest } |> should.be_true
+
+      // Leave the daemon with a generous default window for subsequent tests.
+      let _ = mongreldb.set_history_retention_epochs(db, 10_000)
+      Nil
+    }
+  }
+}
+
+pub fn history_retention_shrink_test() {
+  case connect_or_skip() {
+    Error(Nil) -> Nil
+    Ok(db) -> {
+      let assert Ok(#(window, _)) =
+        mongreldb.set_history_retention_epochs(db, 100)
+
+      let name = unique_table("gleam_ret_shrink")
+      let _ = mongreldb.drop_table(db, name)
+      let assert Ok(_) =
+        mongreldb.create_table(db, name, retention_table_columns())
+
+      let assert Ok(_) =
+        mongreldb.put(
+          db,
+          name,
+          [
+            mongreldb.Cell(1, mongreldb.int_value(1)),
+            mongreldb.Cell(2, mongreldb.string_value("X")),
+            mongreldb.Cell(3, mongreldb.int_value(10)),
+          ],
+          "",
+        )
+      let assert Ok(_) =
+        mongreldb.upsert(
+          db,
+          name,
+          [
+            mongreldb.Cell(1, mongreldb.int_value(1)),
+            mongreldb.Cell(2, mongreldb.string_value("X")),
+            mongreldb.Cell(3, mongreldb.int_value(20)),
+          ],
+          [mongreldb.Cell(3, mongreldb.int_value(20))],
+          "",
+        )
+
+      // Advance the current epoch with several distinct commits so the floor moves.
+      list.range(1, 10)
+      |> list.each(fn(i) {
+        let assert Ok(_) =
+          mongreldb.upsert(
+            db,
+            name,
+            [
+              mongreldb.Cell(1, mongreldb.int_value(1)),
+              mongreldb.Cell(2, mongreldb.string_value("X")),
+              mongreldb.Cell(3, mongreldb.int_value(30 + i)),
+            ],
+            [mongreldb.Cell(3, mongreldb.int_value(30 + i))],
+            "",
+          )
+      })
+
+      let assert Ok(#(_, earliest)) = mongreldb.history_retention(db)
+      let assert Ok(old_epoch) =
+        find_epoch_with_value(db, name, 1, 10, earliest, earliest + window)
+
+      let assert Ok(#(_, new_earliest)) =
+        mongreldb.set_history_retention_epochs(db, 5)
+      { new_earliest > old_epoch } |> should.be_true
+
+      // Querying below the floor should now error.
+      as_of_count(db, name, 1, 10, old_epoch)
+      |> should.be_error
+
+      // Re-expanding cannot restore pruned history.
+      let _ = mongreldb.set_history_retention_epochs(db, 10_000)
+      as_of_count(db, name, 1, 10, old_epoch)
+      |> should.be_error
     }
   }
 }

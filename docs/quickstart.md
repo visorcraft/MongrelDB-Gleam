@@ -166,7 +166,7 @@ total rows: 2
 | `mongreldb.execute(qb)` | Sends the query and decodes the `rows` array. |
 | `mongreldb.count(db, table)` | GET `/tables/{name}/count`. |
 
-## 6. Constrained columns
+## 6. Constrained columns and defaults
 
 `Column` accepts two optional constraint-style fields that are forwarded to the
 daemon verbatim. They are omitted from the JSON body when `None`, so existing
@@ -175,26 +175,82 @@ schemas that don't set them produce an identical payload.
 | Field | Type | Effect |
 |-------|------|--------|
 | `enum_variants` | `Option(List(String))` | Restrict the column to one of the listed string values. The engine rejects writes outside the set with `Error(Conflict)`. |
-| `default_value` | `Option(String)` | Default value applied when the cell is omitted on a `put`. Sent as a raw string and coerced server-side per the column's `ty`. |
+| `default_value` | `Option(String)` | Legacy string default applied when the cell is omitted on a `put`. |
 
-Both fields compose. A column can be a plain string, an enum-only string, a
-string with a default, or an enum with a default:
+For typed static defaults and dynamic defaults use `ColumnWithDefaults`:
 
 ```gleam
-// Plain string - no constraints, no extra keys on the wire.
-mongreldb.Column(2, "customer", "varchar", False, False, None, None),
+import gleam/json
+import gleam/option.{None, Some}
 
-// Enum only - writes outside the set are rejected at commit time.
-mongreldb.Column(4, "status", "varchar", False, False, Some(["pending", "shipped", "delivered", "cancelled"]), None),
+// Static JSON scalar defaults preserve their JSON type.
+mongreldb.ColumnWithDefaults(
+  id: 4,
+  name: "active",
+  ty: "bool",
+  primary_key: False,
+  nullable: True,
+  enum_variants: None,
+  default_value: None,
+  default_value_json: Some(json.bool(True)),
+  default_expr: None,
+)
 
-// Enum with a default - the engine fills in "USD" when the cell is omitted.
-mongreldb.Column(5, "currency", "varchar", False, False, Some(["USD", "EUR", "GBP"]), Some("USD")),
+// Explicit JSON null is a valid static default.
+mongreldb.ColumnWithDefaults(
+  id: 5,
+  name: "notes",
+  ty: "varchar",
+  primary_key: False,
+  nullable: True,
+  enum_variants: None,
+  default_value: None,
+  default_value_json: Some(json.null()),
+  default_expr: None,
+)
+
+// Dynamic defaults use default_expr; accepted values are "now" or "uuid".
+mongreldb.ColumnWithDefaults(
+  id: 6,
+  name: "created",
+  ty: "varchar",
+  primary_key: False,
+  nullable: True,
+  enum_variants: None,
+  default_value: None,
+  default_value_json: None,
+  default_expr: Some("now"),
+)
 ```
 
-An empty `enum_variants` list is also omitted, so `None` and `Some([])`
-produce identical wire shapes.
+`default_expr` takes precedence server-side. A literal `"now"` string default
+must be set through `default_value_json` (as `json.string("now")`), not
+`default_expr`. An empty `enum_variants` list is also omitted, so `None` and
+`Some([])` produce identical wire shapes.
 
-## 7. Common pitfalls
+## 7. History retention
+
+MongrelDB keeps a configurable number of recent commit epochs. The getters
+`history_retention_epochs` and `earliest_retained_epoch` read the current
+window and floor; `set_history_retention_epochs` changes the window. You can
+query older versions with `AS OF EPOCH` through `sql`:
+
+```gleam
+import gleam/int
+
+let assert Ok(#(window, earliest)) =
+  mongreldb.set_history_retention_epochs(db, 10_000)
+let assert Ok(window) = mongreldb.history_retention_epochs(db)
+let assert Ok(earliest) = mongreldb.earliest_retained_epoch(db)
+
+let stmt = "SELECT * FROM orders AS OF EPOCH " <> int.to_string(earliest)
+let assert Ok(rows) = mongreldb.sql(db, stmt)
+```
+
+Lowering retention advances the earliest retained epoch; raising it again does
+not restore history that was already pruned.
+
+## 8. Common pitfalls
 
 **Using the column name instead of the column id.** Every on-wire API uses the
 numeric `id` from `create_table`, never the `name`. The query builder's `column`

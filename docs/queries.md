@@ -146,6 +146,8 @@ let assert Ok(_) = mongreldb.execute(q)
 Approximate nearest-neighbors over a vector column. `k` is the result count.
 
 ```gleam
+import gleam/dynamic
+
 let vec = [
   mongreldb.float_value(0.1),
   mongreldb.float_value(0.2),
@@ -158,7 +160,7 @@ let q =
   |> mongreldb.query("embeddings")
   |> mongreldb.where_("ann", [
     #("column", mongreldb.int_value(2)),
-    #("query", vec_value(vec)),
+    #("query", dynamic.from(vec)),
     #("k", mongreldb.int_value(10)),
   ])
 let assert Ok(_) = mongreldb.execute(q)

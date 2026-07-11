@@ -4,7 +4,7 @@
 
 <h1 align="center">MongrelDB Gleam Client</h1>
 
-History retention: `set_history_retention_epochs`, `history_retention_epochs`, and `earliest_retained_epoch`.
+History retention: `set_history_retention_epochs`, `history_retention`, `history_retention_epochs`, and `earliest_retained_epoch`.
 
 <p align="center">
   <b>Pure Gleam client for MongrelDB - embedded+server database with SQL, vector search, full-text search, and AI-native retrieval.</b>
@@ -53,7 +53,9 @@ Task-focused, commented guides live in [`docs/`](docs):
 ## Quick Example
 
 ```gleam
+import gleam/int
 import gleam/io
+import gleam/list
 import gleam/option.{None}
 import mongreldb
 
@@ -85,17 +87,40 @@ pub fn main() {
     ])
     |> mongreldb.limit_(100)
   let assert Ok(rows) = mongreldb.execute(q)
-  io.println("rows: " <> int_to_string(rows))
+  io.println("rows: " <> int.to_string(list.length(rows)))
 
   let assert Ok(n) = mongreldb.count(db, "orders")
-  io.println("count: " <> int_to_string(n)) // 1
+  io.println("count: " <> int.to_string(n)) // 1
 }
 ```
 
 Use `ColumnWithDefaults` for static JSON scalar defaults and explicit dynamic
 defaults. `default_value_json` takes precedence over legacy string
 `default_value`; `default_expr` accepts `"now"` or `"uuid"` and takes
-precedence server-side.
+precedence server-side. The static-default matrix covers strings, integers,
+booleans, explicit JSON `null`, and literal strings such as `"now"`.
+
+## History retention
+
+MongrelDB keeps a configurable number of recent commit epochs. The getters
+`history_retention_epochs` and `earliest_retained_epoch` read the current
+window and floor; `set_history_retention_epochs` changes the window. You can
+query older versions with `AS OF EPOCH` through `sql`:
+
+```gleam
+import gleam/int
+
+let assert Ok(#(window, floor)) = mongreldb.set_history_retention_epochs(db, 10_000)
+let assert Ok(window) = mongreldb.history_retention_epochs(db)
+let assert Ok(floor) = mongreldb.earliest_retained_epoch(db)
+
+// The chosen epoch must be >= floor.
+let stmt = "SELECT * FROM orders AS OF EPOCH " <> int.to_string(floor)
+let assert Ok(rows) = mongreldb.sql(db, stmt)
+```
+
+Lowering retention advances the earliest retained epoch; raising it again does
+not restore history that was already pruned.
 
 ## Authentication
 
@@ -225,6 +250,10 @@ case mongreldb.schema_for(db, "missing_table") {
 | `create_table(db, name, columns) Result(Int, MongrelError)` / `create_table_with_constraints(db, name, columns, constraints)` | Create a table; the constraints helper forwards the native `constraints` object |
 | `drop_table(db, name) Result(Nil, MongrelError)` | Drop a table |
 | `count(db, table) Result(Int, MongrelError)` | Row count |
+| `history_retention(db) Result(#(Int, Int), MongrelError)` | Get both retention values |
+| `history_retention_epochs(db) Result(Int, MongrelError)` | Get the retention window |
+| `earliest_retained_epoch(db) Result(Int, MongrelError)` | Get the earliest readable epoch |
+| `set_history_retention_epochs(db, epochs) Result(#(Int, Int), MongrelError)` | Set the retention window |
 | `put(db, table, cells, key) Result(Value, MongrelError)` | Insert a row |
 | `upsert(db, table, cells, update_cells, key) Result(Value, MongrelError)` | Insert or update on PK conflict |
 | `delete(db, table, row_id) Result(Nil, MongrelError)` | Delete by row id |
