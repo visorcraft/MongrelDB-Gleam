@@ -723,7 +723,12 @@ fn raw_request(
         False ->
           bit_array.to_string(resp.body)
           |> result.replace_error(Json("non-UTF-8 response body"))
-        True -> Error(map_status(code))
+        True -> {
+          case bit_array.to_string(resp.body) {
+            Ok(body) if string.starts_with(body, "not found:") -> Error(NotFound)
+            _ -> Error(map_status(code))
+          }
+        }
       }
     }
   }
