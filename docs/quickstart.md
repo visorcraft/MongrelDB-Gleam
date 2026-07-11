@@ -158,7 +158,7 @@ total rows: 2
 |------|--------------|
 | `mongreldb.connect(url, options)` | Builds an HTTP client targeting one daemon. Backed by Erlang `httpc` via `gleam/http`. |
 | `mongreldb.health(db)` | GET `/health`; returns `Ok(True)` when the daemon answers. |
-| `mongreldb.create_table(db, name, columns)` | POST `/kit/create_table`. Column `id`s are the on-wire identifiers; use them everywhere else. `enum_variants` and `default_value` are optional and emitted only when set. |
+| `mongreldb.create_table(db, name, columns)` / `create_table_with_constraints(db, name, columns, constraints)` | POST `/kit/create_table`. Column `id`s are the on-wire identifiers; `enum_variants` and `default_value` are optional and emitted only when set; the constraints helper forwards the native `constraints` object. |
 | `mongreldb.put(db, table, cells, key)` | Single-op transaction: POST `/kit/txn` with one `put` op. `cells` is flattened to `[col_id, val, ...]`. |
 | `mongreldb.query(db, table) |> mongreldb.where_(...)` | Builds a `/kit/query` body. `where_` pushes a condition down to a native index. |
 | `mongreldb.projection(qb, [1, 2])` | Server returns only those column ids, saving bandwidth. |

@@ -11,6 +11,7 @@
 // skip notice rather than a cascade of failures.
 
 import gleam/dynamic
+import gleam/json
 import gleam/list
 import gleam/option.{None}
 import gleeunit
@@ -132,6 +133,50 @@ pub fn create_table_and_count_test() {
       let assert Ok(_) =
         fresh_table(db, name, [int_col(1, "id", True), float_col(2, "amount")])
       let assert Ok(0) = mongreldb.count(db, name)
+      Nil
+    }
+  }
+}
+
+pub fn create_table_constraints_test() {
+  case connect_or_skip() {
+    Error(Nil) -> Nil
+    Ok(db) -> {
+      let name = unique_table("gleam_constraints")
+      let _ = mongreldb.drop_table(db, name)
+      let checks =
+        json.preprocessed_array([
+          json.object([
+            #("id", json.int(1)),
+            #("name", json.string("positive_id")),
+            #(
+              "expr",
+              json.object([
+                #(
+                  "Gt",
+                  json.preprocessed_array([
+                    json.object([#("Col", json.int(1))]),
+                    json.object([
+                      #("Lit", json.object([#("Int64", json.int(0))])),
+                    ]),
+                  ]),
+                ),
+              ]),
+            ),
+          ]),
+        ])
+      let constraints = json.object([#("checks", checks)])
+      let assert Ok(_) =
+        mongreldb.create_table_with_constraints(
+          db,
+          name,
+          [
+            mongreldb.Column(1, "id", "int64", True, False, None, None),
+          ],
+          constraints,
+        )
+      let assert Ok(0) = mongreldb.count(db, name)
+      let _ = mongreldb.drop_table(db, name)
       Nil
     }
   }

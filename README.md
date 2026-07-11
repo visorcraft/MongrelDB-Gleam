@@ -34,7 +34,7 @@
 - **Fluent query builder** that pushes conditions down to the engine's specialized indexes for sub-millisecond lookups: bitmap equality/IN, learned-range, null checks, FM-index full-text search, HNSW vector similarity (`ann`), and sparse vector match. Friendly aliases (`column` -> `column_id`, `min`/`max` -> `lo`/`hi`) are translated to the server's on-wire keys.
 - **Idempotent batch transactions** - operations staged locally and committed atomically, with the engine enforcing unique, foreign-key, and check constraints at commit time. Idempotency keys return the original response on duplicate commits, even after a crash.
 - **Full SQL access** through the DataFusion-backed `/sql` endpoint (JSON format requested): recursive CTEs, window functions, `CREATE TABLE AS SELECT`, materialized views, and multi-statement execution.
-- **Schema management**: typed table creation, full schema catalog, and per-table descriptors.
+- **Schema management**: typed table creation with enum/default fields and native constraints, full schema catalog, and per-table descriptors.
 - **Typed errors**: `Auth` (401/403), `NotFound` (404), `Conflict` (409), `Query` (everything else non-2xx), `Http` (transport), and `Json` (malformed response) - a single tagged result you match on.
 
 ## Examples
@@ -215,7 +215,7 @@ case mongreldb.schema_for(db, "missing_table") {
 | `connect(url, options) Result(Client, Nil)` | Construct a client (url defaults to `http://127.0.0.1:8453`) |
 | `health(db) Result(Bool, MongrelError)` | Check daemon health |
 | `table_names(db) Result(List(String), MongrelError)` | List table names |
-| `create_table(db, name, columns) Result(Int, MongrelError)` | Create a table; returns the table id |
+| `create_table(db, name, columns) Result(Int, MongrelError)` / `create_table_with_constraints(db, name, columns, constraints)` | Create a table; the constraints helper forwards the native `constraints` object |
 | `drop_table(db, name) Result(Nil, MongrelError)` | Drop a table |
 | `count(db, table) Result(Int, MongrelError)` | Row count |
 | `put(db, table, cells, key) Result(Value, MongrelError)` | Insert a row |

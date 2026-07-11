@@ -172,12 +172,40 @@ pub fn create_table(
   name: String,
   columns: List(Column),
 ) -> Result(Int, MongrelError) {
+  create_table_request(db, name, columns, None)
+}
+
+/// `create_table_with_constraints` adds the daemon's native `constraints` block. The value
+/// is a JSON object such as `json.object([#("checks", ...)])`.
+pub fn create_table_with_constraints(
+  db: Client,
+  name: String,
+  columns: List(Column),
+  constraints: json.Json,
+) -> Result(Int, MongrelError) {
+  create_table_request(db, name, columns, Some(constraints))
+}
+
+fn create_table_request(
+  db: Client,
+  name: String,
+  columns: List(Column),
+  constraints: Option(json.Json),
+) -> Result(Int, MongrelError) {
   let col_arr = list.map(columns, column_to_json)
-  let payload =
-    json.object([
-      #("name", json.string(name)),
-      #("columns", json.preprocessed_array(col_arr)),
-    ])
+  let payload = case constraints {
+    None ->
+      json.object([
+        #("name", json.string(name)),
+        #("columns", json.preprocessed_array(col_arr)),
+      ])
+    Some(value) ->
+      json.object([
+        #("name", json.string(name)),
+        #("columns", json.preprocessed_array(col_arr)),
+        #("constraints", value),
+      ])
+  }
   use body <- result.try(post_json(db, "/kit/create_table", payload))
   use data <- result.try(json_decode(body))
   use obj <- result.try(
