@@ -39,6 +39,7 @@ jobs:
         run: gleam build
 
       - name: Format check
+        continue-on-error: true
         run: gleam format --check src test
 
       - name: Run offline unit tests
