@@ -18,7 +18,7 @@
 import gleam/bit_array
 import gleam/dict
 import gleam/dynamic
-import gleam/http.{type Method, Delete, Get, Post}
+import gleam/http.{type Method, Delete, Get, Post, Put}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/int
