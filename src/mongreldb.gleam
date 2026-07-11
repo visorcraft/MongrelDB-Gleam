@@ -179,6 +179,33 @@ pub fn table_names(db: Client) -> Result(List(String), MongrelError) {
   Ok(arr)
 }
 
+pub fn set_history_retention_epochs(db: Client, epochs: Int) -> Result(#(Int, Int), MongrelError) {
+  use body <- result.try(raw_request(db, Put, "/history/retention", Some(json.to_string(json.object([#("history_retention_epochs", json.int(epochs))])))))
+  decode_history_retention(body)
+}
+
+pub fn history_retention(db: Client) -> Result(#(Int, Int), MongrelError) {
+  use body <- result.try(raw_request(db, Get, "/history/retention", None))
+  decode_history_retention(body)
+}
+
+pub fn history_retention_epochs(db: Client) -> Result(Int, MongrelError) {
+  use values <- result.try(history_retention(db))
+  Ok(values.0)
+}
+
+pub fn earliest_retained_epoch(db: Client) -> Result(Int, MongrelError) {
+  use values <- result.try(history_retention(db))
+  Ok(values.1)
+}
+
+fn decode_history_retention(body: String) -> Result(#(Int, Int), MongrelError) {
+  use data <- result.try(json_decode(body))
+  use epochs <- result.try(dynamic.field(named: "history_retention_epochs", of: dynamic.int)(data) |> result.replace_error(Json("missing history_retention_epochs")))
+  use earliest <- result.try(dynamic.field(named: "earliest_retained_epoch", of: dynamic.int)(data) |> result.replace_error(Json("missing earliest_retained_epoch")))
+  Ok(#(epochs, earliest))
+}
+
 /// `create_table` creates a table named `name` with the given columns and
 /// returns the assigned table id.
 pub fn create_table(

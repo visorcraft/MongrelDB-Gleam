@@ -69,6 +69,12 @@ pub fn column_to_json_emits_scalar_and_expression_defaults_test() {
   let expr_s = render(expr)
   string.contains(expr_s, "\"default_expr\":\"uuid\"") |> should.be_true
   string.contains(expr_s, "default_value") |> should.be_false
+  let base = fn(value) {
+    mongreldb.ColumnWithDefaults(id: 5, name: "x", ty: "string", primary_key: False, nullable: True, enum_variants: None, default_value: None, default_value_json: Some(value), default_expr: None)
+  }
+  string.contains(render(base(json.string("draft"))), "\"default_value\":\"draft\"") |> should.be_true
+  string.contains(render(base(json.bool(True))), "\"default_value\":true") |> should.be_true
+  string.contains(render(base(json.null())), "\"default_value\":null") |> should.be_true
 }
 
 pub fn column_to_json_omits_absent_enum_and_default_test() {
