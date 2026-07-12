@@ -7,6 +7,7 @@
 // `/kit/create_table` accepts. A future regression that drops either key would
 // silently break user schemas, so the wire shape is asserted here.
 
+import gleam/int
 import gleam/option.{type Option, None, Some}
 import gleam/json
 import gleam/string
@@ -146,6 +147,113 @@ pub fn history_retention_response_parse_non_integer_test() {
     "{\"history_retention_epochs\":\"100\",\"earliest_retained_epoch\":5}",
   )
   |> should.be_error
+}
+
+// ── Transport-level retention tests ─────────────────────────────────────────
+//
+// The payload and parser tests above exercise the JSON helpers in isolation.
+// These tests drive the client's real `set_history_retention_epochs` and
+// `history_retention` functions through the HTTP transport (`raw_request` ->
+// `send` -> Erlang `httpc`) against an in-process mock TCP server (provided
+// by `mongreldb_ffi`), so we can assert the actual on-wire method, the
+// `/history/retention` path, the PUT body key, the GET response keys, and the
+// propagation of a non-2xx response to a typed `MongrelError`. The mock uses
+// only Erlang/OTP built-ins - no new dependency.
+
+@external(erlang, "mongreldb_ffi", "start_mock_server")
+fn start_mock_server() -> Result(Int, Nil)
+
+@external(erlang, "mongreldb_ffi", "stop_mock_server")
+fn stop_mock_server() -> Nil
+
+@external(erlang, "mongreldb_ffi", "set_mock_response")
+fn set_mock_response(status: Int, body: String) -> Nil
+
+@external(erlang, "mongreldb_ffi", "last_mock_request")
+fn last_mock_request() -> Result(#(String, String, String), Nil)
+
+/// `mock_url` builds the base URL the mongreldb client should target to reach
+/// the mock on its assigned port.
+fn mock_url(port: Int) -> String {
+  "http://127.0.0.1:" <> int.to_string(port)
+}
+
+pub fn history_retention_transport_get_test() {
+  let assert Ok(port) = start_mock_server()
+  set_mock_response(
+    200,
+    "{\"history_retention_epochs\":250,\"earliest_retained_epoch\":5}",
+  )
+  let assert Ok(db) =
+    mongreldb.connect(mock_url(port), mongreldb.Options(..))
+  let assert Ok(#(epochs, earliest)) = mongreldb.history_retention(db)
+  should.equal(epochs, 250)
+  should.equal(earliest, 5)
+  let assert Ok(#(method, path, _body)) = last_mock_request()
+  should.equal(method, "GET")
+  should.be_true(string.contains(path, "/history/retention"))
+  stop_mock_server()
+}
+
+pub fn history_retention_transport_put_test() {
+  let assert Ok(port) = start_mock_server()
+  set_mock_response(
+    200,
+    "{\"history_retention_epochs\":2048,\"earliest_retained_epoch\":7}",
+  )
+  let assert Ok(db) =
+    mongreldb.connect(mock_url(port), mongreldb.Options(..))
+  let assert Ok(#(epochs, earliest)) =
+    mongreldb.set_history_retention_epochs(db, 2048)
+  should.equal(epochs, 2048)
+  should.equal(earliest, 7)
+  let assert Ok(#(method, path, body)) = last_mock_request()
+  should.equal(method, "PUT")
+  should.be_true(string.contains(path, "/history/retention"))
+  // The PUT body must carry the single key the server reads.
+  should.be_true(string.contains(body, "\"history_retention_epochs\":2048"))
+  stop_mock_server()
+}
+
+pub fn history_retention_transport_non_2xx_test() {
+  let assert Ok(port) = start_mock_server()
+  // 500 maps to MongrelError.Http in map_status.
+  set_mock_response(500, "{\"error\":{\"message\":\"boom\"}}")
+  let assert Ok(db) =
+    mongreldb.connect(mock_url(port), mongreldb.Options(..))
+  let result = mongreldb.history_retention(db)
+  should.be_error(result)
+  let assert Error(err) = result
+  should.be_true(is_http_error(err))
+  stop_mock_server()
+}
+
+pub fn history_retention_transport_404_test() {
+  let assert Ok(port) = start_mock_server()
+  // 404 maps to MongrelError.NotFound.
+  set_mock_response(404, "{\"error\":{\"message\":\"no such setting\"}}")
+  let assert Ok(db) =
+    mongreldb.connect(mock_url(port), mongreldb.Options(..))
+  let result = mongreldb.set_history_retention_epochs(db, 1)
+  should.be_error(result)
+  let assert Error(err) = result
+  should.be_true(is_not_found(err))
+  stop_mock_server()
+}
+
+/// `is_http_error` narrows a `MongrelError` to the `Http` variant.
+fn is_http_error(err: mongreldb.MongrelError) -> Bool {
+  case err {
+    mongreldb.Http(_) -> True
+    _ -> False
+  }
+}
+
+fn is_not_found(err: mongreldb.MongrelError) -> Bool {
+  case err {
+    mongreldb.NotFound -> True
+    _ -> False
+  }
 }
 
 // ── Full static-default matrix ──────────────────────────────────────────────
