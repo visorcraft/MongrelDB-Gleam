@@ -655,13 +655,12 @@ pub fn history_retention_shrink_test() {
       { new_earliest > old_epoch } |> should.be_true
 
       // Querying below the floor should now error.
-      as_of_count(db, name, 1, 10, old_epoch)
-      |> should.be_error
+      let _ = as_of_count(db, name, 1, 10, old_epoch) |> should.be_error
 
       // Re-expanding cannot restore pruned history.
       let _ = mongreldb.set_history_retention_epochs(db, 10_000)
-      as_of_count(db, name, 1, 10, old_epoch)
-      |> should.be_error
+      let _ = as_of_count(db, name, 1, 10, old_epoch) |> should.be_error
+      Nil
     }
   }
 }
