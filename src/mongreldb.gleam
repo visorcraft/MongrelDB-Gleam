@@ -9,7 +9,7 @@
 //// Connect with `connect` and a base URL:
 ////
 //// ```gleam
-//// let assert Ok(db) = mongreldb.connect("http://127.0.0.1:8453", mongreldb.Options(..))
+//// let assert Ok(db) = mongreldb.connect("http://127.0.0.1:8453", mongreldb.Options(token: "", username: "", password: ""))
 //// let assert Ok(true) = mongreldb.health(db)
 //// ```
 ////

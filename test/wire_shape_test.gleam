@@ -185,7 +185,7 @@ pub fn history_retention_transport_get_test() {
     "{\"history_retention_epochs\":250,\"earliest_retained_epoch\":5}",
   )
   let assert Ok(db) =
-    mongreldb.connect(mock_url(port), mongreldb.Options(..))
+    mongreldb.connect(mock_url(port), mongreldb.Options(token: "", username: "", password: ""))
   let assert Ok(#(epochs, earliest)) = mongreldb.history_retention(db)
   should.equal(epochs, 250)
   should.equal(earliest, 5)
@@ -202,7 +202,7 @@ pub fn history_retention_transport_put_test() {
     "{\"history_retention_epochs\":2048,\"earliest_retained_epoch\":7}",
   )
   let assert Ok(db) =
-    mongreldb.connect(mock_url(port), mongreldb.Options(..))
+    mongreldb.connect(mock_url(port), mongreldb.Options(token: "", username: "", password: ""))
   let assert Ok(#(epochs, earliest)) =
     mongreldb.set_history_retention_epochs(db, 2048)
   should.equal(epochs, 2048)
@@ -220,7 +220,7 @@ pub fn history_retention_transport_non_2xx_test() {
   // 500 maps to MongrelError.Http in map_status.
   set_mock_response(500, "{\"error\":{\"message\":\"boom\"}}")
   let assert Ok(db) =
-    mongreldb.connect(mock_url(port), mongreldb.Options(..))
+    mongreldb.connect(mock_url(port), mongreldb.Options(token: "", username: "", password: ""))
   let result = mongreldb.history_retention(db)
   should.be_error(result)
   let assert Error(err) = result
@@ -233,7 +233,7 @@ pub fn history_retention_transport_404_test() {
   // 404 maps to MongrelError.NotFound.
   set_mock_response(404, "{\"error\":{\"message\":\"no such setting\"}}")
   let assert Ok(db) =
-    mongreldb.connect(mock_url(port), mongreldb.Options(..))
+    mongreldb.connect(mock_url(port), mongreldb.Options(token: "", username: "", password: ""))
   let result = mongreldb.set_history_retention_epochs(db, 1)
   should.be_error(result)
   let assert Error(err) = result
