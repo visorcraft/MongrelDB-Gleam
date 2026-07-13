@@ -404,6 +404,7 @@ pub type QueryBuilder {
     conditions: List(QueryCondition),
     projection: Option(List(Int)),
     limit: Option(Int),
+    offset: Option(Int),
   )
 }
 
@@ -415,6 +416,7 @@ pub fn query(db: Client, table: String) -> QueryBuilder {
     conditions: [],
     projection: None,
     limit: None,
+    offset: None,
   )
 }
 
@@ -438,6 +440,11 @@ pub fn projection(qb: QueryBuilder, column_ids: List(Int)) -> QueryBuilder {
 /// `limit_` caps the number of rows returned.
 pub fn limit_(qb: QueryBuilder, row_limit: Int) -> QueryBuilder {
   QueryBuilder(..qb, limit: Some(row_limit))
+}
+
+/// `offset` skips matching rows before applying the limit.
+pub fn offset(qb: QueryBuilder, row_offset: Int) -> QueryBuilder {
+  QueryBuilder(..qb, offset: Some(row_offset))
 }
 
 /// `execute` builds the request, POSTs it to `/kit/query`, decodes the result
@@ -465,7 +472,11 @@ pub fn execute(qb: QueryBuilder) -> Result(List(Value), MongrelError) {
     None -> with_proj
     Some(n) -> [#("limit", json.int(n)), ..with_proj]
   }
-  let payload = json.object(with_limit)
+  let with_offset = case qb.offset {
+    None -> with_limit
+    Some(n) -> [#("offset", json.int(n)), ..with_limit]
+  }
+  let payload = json.object(with_offset)
   use body <- result.try(post_json(qb.client, "/kit/query", payload))
   use data <- result.try(json_decode(body))
   use obj <- result.try(

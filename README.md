@@ -273,6 +273,7 @@ case mongreldb.schema_for(db, "missing_table") {
 | `where_(qb, type, params) QueryBuilder` | Add a native condition (AND-ed) |
 | `projection(qb, column_ids) QueryBuilder` | Set column projection |
 | `limit_(qb, n) QueryBuilder` | Set row limit |
+| `offset(qb, n) QueryBuilder` | Skip matching rows before the limit |
 | `execute(qb) Result(List(Value), MongrelError)` | Run the query; returns the rows |
 
 ### `Transaction`
