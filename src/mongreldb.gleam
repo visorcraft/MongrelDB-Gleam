@@ -855,9 +855,14 @@ fn json_decode(body: String) -> Result(Value, MongrelError) {
 // ── Cell / column helpers ─────────────────────────────────────────────────
 
 /// `flatten_cells` converts a list of cells to the server's flat
-/// `[col_id, value, col_id, value, ...]` JSON array.
+/// `[col_id, value, ...]` JSON array in ascending column-id order.
+/// Stable ordering is required for idempotency keys: the server hashes the
+/// request payload, and unordered pair order would make two commits of the
+/// same cells look like a reuse mismatch.
 pub fn flatten_cells(cells: List(Cell)) -> List(json.Json) {
-  list.flat_map(cells, fn(c) {
+  cells
+  |> list.sort(fn(a, b) { int.compare(a.id, b.id) })
+  |> list.flat_map(fn(c) {
     [json.int(c.id), json_value_of_dynamic(c.value)]
   })
 }
