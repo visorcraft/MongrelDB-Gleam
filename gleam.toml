@@ -1,5 +1,5 @@
 name = "mongreldb"
-version = "0.63.0"
+version = "0.63.1"
 description = "Pure-Gleam HTTP client for MongrelDB."
 licences = ["MIT", "Apache-2.0"]
 repository = { type = "github", user = "visorcraft", repo = "MongrelDB-Gleam" }
