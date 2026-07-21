@@ -247,7 +247,7 @@ case mongreldb.schema_for(db, "missing_table") {
 | `connect(url, options) Result(Client, Nil)` | Construct a client (url defaults to `http://127.0.0.1:8453`) |
 | `health(db) Result(Bool, MongrelError)` | Check daemon health |
 | `table_names(db) Result(List(String), MongrelError)` | List table names |
-| `create_table(db, name, columns) Result(Int, MongrelError)` / `create_table_with_constraints(db, name, columns, constraints)` | Create a table; the constraints helper forwards the native `constraints` object |
+| `create_table_with_schema(db, name, columns, constraints, indexes)` | Create a table with optional constraints and all index definitions |
 | `drop_table(db, name) Result(Nil, MongrelError)` | Drop a table |
 | `count(db, table) Result(Int, MongrelError)` | Row count |
 | `history_retention(db) Result(#(Int, Int), MongrelError)` | Get both retention values |

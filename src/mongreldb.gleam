@@ -128,6 +128,16 @@ pub type Column {
     /// Dynamic default: `now` or `uuid`.
     default_expr: Option(String),
   )
+  ColumnWithEmbeddingSource(
+    id: Int,
+    name: String,
+    ty: String,
+    primary_key: Bool,
+    nullable: Bool,
+    enum_variants: Option(List(String)),
+    default_value: Option(String),
+    embedding_source: json.Json,
+  )
 }
 
 /// `Value` is a dynamic JSON value used for cells, query parameters, and the
@@ -238,7 +248,7 @@ pub fn create_table(
   name: String,
   columns: List(Column),
 ) -> Result(Int, MongrelError) {
-  create_table_request(db, name, columns, None)
+  create_table_request(db, name, columns, None, None)
 }
 
 /// `create_table_with_constraints` adds the daemon's native `constraints` block. The value
@@ -249,7 +259,18 @@ pub fn create_table_with_constraints(
   columns: List(Column),
   constraints: json.Json,
 ) -> Result(Int, MongrelError) {
-  create_table_request(db, name, columns, Some(constraints))
+  create_table_request(db, name, columns, Some(constraints), None)
+}
+
+/// Create a table with constraints and full secondary-index definitions.
+pub fn create_table_with_schema(
+  db: Client,
+  name: String,
+  columns: List(Column),
+  constraints: Option(json.Json),
+  indexes: List(json.Json),
+) -> Result(Int, MongrelError) {
+  create_table_request(db, name, columns, constraints, Some(indexes))
 }
 
 fn create_table_request(
@@ -257,19 +278,23 @@ fn create_table_request(
   name: String,
   columns: List(Column),
   constraints: Option(json.Json),
+  indexes: Option(List(json.Json)),
 ) -> Result(Int, MongrelError) {
   let col_arr = list.map(columns, column_to_json)
-  let payload = case constraints {
-    None ->
-      json.object([
-        #("name", json.string(name)),
-        #("columns", json.preprocessed_array(col_arr)),
-      ])
+  let base = [
+    #("name", json.string(name)),
+    #("columns", json.preprocessed_array(col_arr)),
+  ]
+  let with_constraints = case constraints {
+    None -> base
+    Some(value) -> [#("constraints", value), ..base]
+  }
+  let payload = case indexes {
+    None -> json.object(with_constraints)
     Some(value) ->
       json.object([
-        #("name", json.string(name)),
-        #("columns", json.preprocessed_array(col_arr)),
-        #("constraints", value),
+        #("indexes", json.preprocessed_array(value)),
+        ..with_constraints
       ])
   }
   use body <- result.try(post_json(db, "/kit/create_table", payload))
@@ -899,7 +924,12 @@ pub fn column_to_json(c: Column) -> json.Json {
         Some(d) -> [#("default_value", json.string(d)), ..with_enum]
       }
   }
-  json.object(with_default)
+  let with_embedding = case c {
+    ColumnWithEmbeddingSource(embedding_source: source, ..) ->
+      [#("embedding_source", source), ..with_default]
+    _ -> with_default
+  }
+  json.object(with_embedding)
 }
 
 /// `column_to_json_string` serializes a `Column` to a compact JSON string.
