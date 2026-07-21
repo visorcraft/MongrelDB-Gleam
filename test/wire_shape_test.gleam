@@ -178,6 +178,31 @@ fn mock_url(port: Int) -> String {
   "http://127.0.0.1:" <> int.to_string(port)
 }
 
+pub fn create_table_ann_backend_options_test() {
+  let assert Ok(port) = start_mock_server()
+  set_mock_response(200, "{\"table_id\":1}")
+  let assert Ok(db) =
+    mongreldb.connect(mock_url(port), mongreldb.Options(token: "", username: "", password: ""))
+  let ann = json.object([
+    #("algorithm", json.string("diskann")),
+    #("quantization", json.string("dense")),
+    #("diskann", json.object([
+      #("r", json.int(64)), #("l", json.int(128)),
+      #("beam_width", json.int(8)), #("alpha", json.int(120)),
+    ])),
+  ])
+  let index = json.object([
+    #("name", json.string("ann")), #("column_id", json.int(2)),
+    #("kind", json.string("ann")), #("options", json.object([#("ann", ann)])),
+  ])
+  let assert Ok(1) = mongreldb.create_table_with_schema(db, "vectors", [], None, [index])
+  let assert Ok(#(_, _, body)) = last_mock_request()
+  should.be_true(string.contains(body, "\"algorithm\":\"diskann\""))
+  should.be_true(string.contains(body, "\"quantization\":\"dense\""))
+  should.be_true(string.contains(body, "\"beam_width\":8"))
+  stop_mock_server()
+}
+
 pub fn history_retention_transport_get_test() {
   let assert Ok(port) = start_mock_server()
   set_mock_response(
