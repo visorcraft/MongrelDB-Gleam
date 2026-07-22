@@ -630,6 +630,127 @@ pub fn rollback(txn: Transaction) -> Result(Transaction, MongrelError) {
 /// output. The server returns a JSON array of row objects keyed by column
 /// name. For statements that yield no rows (DDL/DML), an empty list is
 /// returned.
+/// Structural HLC from durable recovery (0.64+).
+pub type CommitHlc {
+  CommitHlc(physical_micros: Int, logical: Int, node_tiebreaker: Int)
+}
+
+/// Decode last_commit_hlc object; Error(Nil) when physical_micros is missing.
+pub fn parse_commit_hlc(raw: Value) -> Result(CommitHlc, Nil) {
+  use phys <- result.try(
+    dynamic.field(named: "physical_micros", of: dynamic.int)(raw)
+    |> result.replace_error(Nil),
+  )
+  let logical = case dynamic.field(named: "logical", of: dynamic.int)(raw) {
+    Ok(n) -> n
+    Error(_) -> 0
+  }
+  let node = case dynamic.field(named: "node_tiebreaker", of: dynamic.int)(raw) {
+    Ok(n) -> n
+    Error(_) -> 0
+  }
+  Ok(CommitHlc(phys, logical, node))
+}
+
+/// Authoritative HLC from a query status object: durable → outcome → top-level.
+pub fn commit_hlc_from_status(status: Value) -> Result(CommitHlc, Nil) {
+  case dynamic.field(named: "durable", of: dynamic.dynamic)(status) {
+    Ok(durable) ->
+      case dynamic.field(named: "last_commit_hlc", of: dynamic.dynamic)(durable) {
+        Ok(hlc) ->
+          case parse_commit_hlc(hlc) {
+            Ok(c) -> Ok(c)
+            Error(_) -> commit_hlc_from_outcome(status)
+          }
+        Error(_) -> commit_hlc_from_outcome(status)
+      }
+    Error(_) -> commit_hlc_from_outcome(status)
+  }
+}
+
+fn commit_hlc_from_outcome(status: Value) -> Result(CommitHlc, Nil) {
+  case dynamic.field(named: "outcome", of: dynamic.dynamic)(status) {
+    Ok(outcome) ->
+      case dynamic.field(named: "last_commit_hlc", of: dynamic.dynamic)(outcome) {
+        Ok(hlc) ->
+          case parse_commit_hlc(hlc) {
+            Ok(c) -> Ok(c)
+            Error(_) -> commit_hlc_from_top(status)
+          }
+        Error(_) -> commit_hlc_from_top(status)
+      }
+    Error(_) -> commit_hlc_from_top(status)
+  }
+}
+
+fn commit_hlc_from_top(status: Value) -> Result(CommitHlc, Nil) {
+  case dynamic.field(named: "last_commit_hlc", of: dynamic.dynamic)(status) {
+    Ok(hlc) -> parse_commit_hlc(hlc)
+    Error(_) -> Error(Nil)
+  }
+}
+
+/// Text → embed → ANN retrieve (POST /kit/retrieve_text, 0.64+).
+pub fn retrieve_text(
+  db: Client,
+  table: String,
+  embedding_column: Int,
+  text: String,
+  k: Option(Int),
+) -> Result(Value, MongrelError) {
+  case table == "" {
+    True -> Error(Query("table is required"))
+    False ->
+      case text == "" {
+        True -> Error(Query("text is required"))
+        False -> {
+          let base = [
+            #("table", json.string(table)),
+            #("embedding_column", json.int(embedding_column)),
+            #("text", json.string(text)),
+          ]
+          let fields = case k {
+            Some(kv) -> list.append(base, [#("k", json.int(kv))])
+            None -> base
+          }
+          use body <- result.try(post_json(
+            db,
+            "/kit/retrieve_text",
+            json.object(fields),
+          ))
+          json_decode(body)
+        }
+      }
+  }
+}
+
+/// Retained SQL status for durable recovery (GET /queries/{query_id}).
+pub fn query_status(db: Client, query_id: String) -> Result(Value, MongrelError) {
+  case query_id == "" {
+    True -> Error(Query("query_id is required"))
+    False -> {
+      let path = "/queries/" <> url_path_escape(query_id)
+      use body <- result.try(raw_request(db, Get, path, None))
+      json_decode(body)
+    }
+  }
+}
+
+/// Request cancellation of a running SQL query.
+pub fn cancel_query(db: Client, query_id: String) -> Result(Value, MongrelError) {
+  case query_id == "" {
+    True -> Error(Query("query_id is required"))
+    False -> {
+      let path = "/queries/" <> url_path_escape(query_id) <> "/cancel"
+      use body <- result.try(post_json(db, path, json.object([])))
+      case string.trim(body) {
+        "" -> Ok(dynamic.from(Nil))
+        _ -> json_decode(body)
+      }
+    }
+  }
+}
+
 pub fn sql(db: Client, sql_text: String) -> Result(List(Value), MongrelError) {
   let payload =
     json.object([
