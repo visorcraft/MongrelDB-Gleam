@@ -22,7 +22,21 @@ History retention: `set_history_retention_epochs`, `history_retention`, `history
 
 | Surface | Module | Install |
 |---|---|---|
-| Gleam client | `mongreldb` | `gleam add mongreldb` |
+| Gleam client | `mongreldb` | path dependency from a git clone (see below) |
+
+The package is not yet published to the Hex package repository, and Gleam
+does not support git dependencies, so clone the repo and use a path
+dependency:
+
+```sh
+git clone https://github.com/visorcraft/MongrelDB-Gleam.git
+```
+
+```toml
+# gleam.toml
+[dependencies]
+mongreldb = { path = "../MongrelDB-Gleam" }
+```
 
 ## Requirements
 
