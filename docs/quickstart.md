@@ -62,10 +62,20 @@ Leave the daemon running for the rest of this guide.
 
 ## 3. Create a project and pull in the client
 
+The client is not yet published to Hex, and Gleam does not support git
+dependencies, so clone the repo and use a path dependency:
+
 ```sh
+git clone https://github.com/visorcraft/MongrelDB-Gleam.git
 gleam new my_app
 cd my_app
-gleam add mongreldb
+```
+
+Add the clone to your `gleam.toml`:
+
+```toml
+[dependencies]
+mongreldb = { path = "../MongrelDB-Gleam" }
 ```
 
 ## 4. Write your first program

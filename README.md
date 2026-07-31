@@ -345,11 +345,12 @@ chmod +x bin/mongreldb-server
 
 ### Using the client in your project
 
-Add the package to your `gleam.toml`:
+The client is not yet published to Hex (see [Package](#package)), so add the
+git clone as a path dependency in your `gleam.toml`:
 
 ```toml
 [dependencies]
-mongreldb = { version = ">= 0.63.1" }
+mongreldb = { path = "../MongrelDB-Gleam" }
 ```
 
 ## Contributing
